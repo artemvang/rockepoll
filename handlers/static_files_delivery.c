@@ -397,7 +397,7 @@ build_response(struct connection *conn)
     struct tm tm;
     off_t lower, upper, content_length;
     char *p, *q;
-    char content_range[64] = {0};
+    char content_range[128] = {0};
     struct file_stats st = {0};
     struct io_step *step;
     enum http_status resp_status;
