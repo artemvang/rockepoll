@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <sys/uio.h>
+#include <sys/socket.h>
 
 #include "io.h"
 #include "utils.h"
@@ -125,6 +126,41 @@ static const struct {
 };
 
 
+static int
+fast_strncmp(const char *ptr0, const char *ptr1, size_t len)
+{
+    int current_block, fast = len / sizeof(size_t) + 1;
+    size_t offset = (fast - 1) * sizeof(size_t);
+    size_t *lptr0 = (size_t *)ptr0;
+    size_t *lptr1 = (size_t *)ptr1;
+
+    if (len <= sizeof(size_t)) {
+        fast = 0;
+    }
+
+    current_block = 0;
+    while (current_block < fast) {
+        size_t res = lptr0[current_block] ^ lptr1[current_block];
+        if (res) {
+            return 1;
+        }
+
+        current_block++;
+    }
+
+    while (len > offset) {
+        if (ptr0[offset] ^ ptr1[offset]) { 
+            return 1;
+        }
+        offset++;
+    }
+
+    return 0;
+}
+
+#define strncmp fast_strncmp
+
+
 static inline void
 timestamp(time_t t, char *buf)
 {   
@@ -164,6 +200,7 @@ get_file_stats(char *target, struct file_stats *st)
 
     st->mime = get_url_mimetype(target);
 
+
     if ((st->fd = open(target, O_RDONLY | O_NONBLOCK)) < 0) {
         return (errno == EACCES) ? S_FORBIDDEN : S_NOT_FOUND;
     }
@@ -186,22 +223,40 @@ get_file_stats(char *target, struct file_stats *st)
 }
 
 
-static void
-decode(char *src, char *dest)
-{
-    size_t i;
-    unsigned char n;
-    char *s;
 
-    for (s = src, i = 0; *s; s++, i++) {
-        if (*s == '%' && (sscanf(s + 1, "%2hhx", &n) == 1)) {
-            dest[i] = n;
-            s += 2;
+static inline __attribute__((always_inline)) char
+decode_hex_digit(char ch)
+{
+    static const char hex_digit_tbl[256] = {
+        ['0'] = 0,  ['1'] = 1,  ['2'] = 2,  ['3'] = 3,  ['4'] = 4,  ['5'] = 5,
+        ['6'] = 6,  ['7'] = 7,  ['8'] = 8,  ['9'] = 9,  ['a'] = 10, ['b'] = 11,
+        ['c'] = 12, ['d'] = 13, ['e'] = 14, ['f'] = 15, ['A'] = 10, ['B'] = 11,
+        ['C'] = 12, ['D'] = 13, ['E'] = 14, ['F'] = 15,
+    };
+
+    return hex_digit_tbl[(unsigned char)ch];
+}
+
+static void
+url_decode(char *target)
+{
+    char tmp;
+    char *ch, *decoded;
+
+    for (decoded = ch = target; *ch; ch++) {
+        if (*ch == '%') {
+            tmp = (char)(decode_hex_digit(ch[1]) << 4 | decode_hex_digit(ch[2]));
+
+            *decoded++ = tmp;
+            ch += 2;
+        } else if (*ch == '+') {
+            *decoded++ = ' ';
         } else {
-            dest[i] = *s;
+            *decoded++ = *ch;
         }
     }
-    dest[i] = '\0';
+
+    *decoded = '\0';
 }
 
 
@@ -217,42 +272,42 @@ parse_request(char *raw_content, struct http_request *r)
 
     p += sizeof("GET") - 1;
 
-    if (*(p++) != ' ') {
+    if (unlikely(*(p++) != ' ')) {
         return S_BAD_REQUEST;
     }
 
     /* skip / */
     p++;
-    if (!(q = strchr(p, ' '))) {
+    if (unlikely(!(q = strchr(p, ' ')))) {
         return S_BAD_REQUEST;
     }
 
     *(q++) = '\0';
     r->target = p;
-    decode(r->target, r->target);
+    url_decode(r->target);
 
     p = q;
 
     /* HTTP-VERSION */
-    if (strncmp(p, "HTTP/1.", sizeof("HTTP/1.") - 1)) {
+    if (unlikely(strncmp(p, "HTTP/1.", sizeof("HTTP/1.") - 1))) {
         return S_BAD_REQUEST;
     }
 
     p += sizeof("HTTP/1.") - 1;
-    if (*p != '1' && *p != '0') {
+    if (unlikely(*p != '1' && *p != '0')) {
         return S_VERSION_NOT_SUPPORTED;
     }
 
     p++;
 
     /* check terminator */
-    if (strncmp(p, "\r\n", sizeof("\r\n") - 1)) {
+    if (unlikely(strncmp(p, "\r\n", sizeof("\r\n") - 1))) {
         return S_BAD_REQUEST;
     }
 
     p += sizeof("\r\n") - 1;
 
-    while (strncmp(p, "\r\n", sizeof("\r\n") - 1)) {
+    while (unlikely(strncmp(p, "\r\n", sizeof("\r\n") - 1))) {
         for (i = 0; i < HEADERS_COUNT; i++) {
             if (!strncmp(p, http_headers[i].name, http_headers[i].size)) {
                 break;
@@ -260,7 +315,7 @@ parse_request(char *raw_content, struct http_request *r)
         }
 
         if (i == HEADERS_COUNT) {
-            if (!(q = strchr(p, '\r'))) {
+            if (unlikely(!(q = strchr(p, '\r')))) {
                 return S_BAD_REQUEST;
             }
 
@@ -271,7 +326,7 @@ parse_request(char *raw_content, struct http_request *r)
         p += http_headers[i].size;
 
         /* a single colon must follow the field name */
-        if (*p != ':') {
+        if (unlikely(*p != ':')) {
             return S_BAD_REQUEST;
         }
 
@@ -279,7 +334,7 @@ parse_request(char *raw_content, struct http_request *r)
         for (++p; *p == ' ' || *p == '\t'; p++) ;
 
         /* extract field content */
-        if (!(q = strchr(p, '\r'))) {
+        if (unlikely(!(q = strchr(p, '\r')))) {
             return S_BAD_REQUEST;
         }
 
@@ -322,8 +377,8 @@ write_file(struct connection *conn)
     do {
         size = MIN(SENDFILE_CHUNK_SIZE, meta->size);
         sent_len = sendfile(conn->fd, meta->infd, &(meta->start_offset), size);
-        if (sent_len < 0) {
-            if (errno == EAGAIN) {
+        if (unlikely(sent_len < 0)) {
+            if (likely(errno == EAGAIN)) {
                 return IO_AGAIN;
             }
 
@@ -342,13 +397,10 @@ write_header(struct connection *conn)
 {
     ssize_t write_size;
     struct header_meta *meta = conn->steps->meta;
-    struct iovec iov[] = {
-        {.iov_base=meta->data, .iov_len=meta->size}
-    };
 
-    write_size = writev(conn->fd, iov, 1);
-    if (write_size < 0) {
-        if (errno == EAGAIN) {
+    write_size = send(conn->fd, meta->data, meta->size, 0);
+    if (unlikely(write_size < 0)) {
+        if (likely(errno == EAGAIN)) {
             return IO_AGAIN;
         }
 
@@ -411,7 +463,7 @@ build_response(struct connection *conn)
     req = conn->steps->meta;
 
     resp_status = parse_request(req->data, &r);
-    if (resp_status != S_OK) {
+    if (unlikely(resp_status != S_OK)) {
         build_http_status_step(resp_status, conn);
         return;
     }
@@ -427,7 +479,7 @@ build_response(struct connection *conn)
     }
 
     if (r.headers[H_IF_MOD]) {
-        if (!strptime(r.headers[H_IF_MOD], "%a, %d %b %Y %T GMT", &tm)) {
+        if (unlikely(!strptime(r.headers[H_IF_MOD], "%a, %d %b %Y %T GMT", &tm))) {
             build_http_status_step(S_BAD_REQUEST, conn);
             return;
         }
@@ -445,14 +497,14 @@ build_response(struct connection *conn)
     if (r.headers[H_RANGE]) {
         p = r.headers[H_RANGE];
 
-        if (strncmp(p, "bytes=", sizeof("bytes=") - 1)) {
+        if (unlikely(strncmp(p, "bytes=", sizeof("bytes=") - 1))) {
             build_http_status_step(S_BAD_REQUEST, conn);
             return;
         }
 
         p += sizeof("bytes=") - 1;
 
-        if (!(q = strchr(p, '-'))) {
+        if (unlikely(!(q = strchr(p, '-')))) {
             build_http_status_step(S_BAD_REQUEST, conn);
             return;
         }
@@ -467,7 +519,7 @@ build_response(struct connection *conn)
             upper = strtoull(q, NULL, 10);
         }
 
-        if (lower < 0 || upper < 0 || lower > upper) {
+        if (unlikely(lower < 0 || upper < 0 || lower > upper)) {
             build_http_status_step(S_RANGE_NOT_SATISFIABLE, conn);
             return;
         }
