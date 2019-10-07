@@ -5,6 +5,9 @@
 #include "io.h"
 
 
+#define ETAG_SIZE 64
+
+
 enum http_status {
     S_OK                     = 200,
     S_PARTIAL_CONTENT        = 206,
@@ -39,7 +42,7 @@ struct file_stats {
     int fd;
     char *mime;
     off_t size;
-    char etag[64];
+    char etag[ETAG_SIZE];
 };
 
 
