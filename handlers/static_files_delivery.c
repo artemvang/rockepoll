@@ -164,7 +164,7 @@ fast_strncmp(const char *ptr0, const char *ptr1, size_t len)
 static inline void
 timestamp(time_t t, char *buf)
 {   
-    strftime(buf, TIMESTAMP_SIZE, "%a, %d %b %Y %T GMT", gmtime(&t));
+    strftime(buf, TIMESTAMP_SIZE, "%a, %d %b %Y %T GMT", localtime(&t));
 }
 
 
@@ -546,7 +546,6 @@ build_response(struct connection *conn)
             "Accept-Ranges: bytes\r\n"
             "Content-Type: %s\r\n"
             "Content-Length: %lld\r\n"
-            // "Date: %s\r\n"
             "Last-Modified: %s\r\n"
             "%s"
             "%s"
