@@ -97,6 +97,7 @@ accept_peers_loop()
             conn->last_active = last_active;
             conn->status = C_RUN;
             conn->keep_alive = keep_alive;
+            conn->steps = NULL;
 
             setup_read_io_step(conn);
                 
