@@ -127,7 +127,8 @@ int_handler(int dummy unused)
 static inline void
 usage()
 {
-    err(0, "usage: %s [-l listen] [-p port] [-k]", argv0);
+    printf("usage: %s [-l listen] [-p port] [-k] [-h]\n", argv0);
+    exit(0);
 }
 
 
@@ -152,8 +153,10 @@ main(int argc, char *argv[])
     case 'k':
         keep_alive = 1;
         break;
-    default:
+    case 'h':
         usage();
+        break;
+    default:
         break;
     } ARGEND;
 
