@@ -67,7 +67,7 @@ create_listen_socket()
 static void
 accept_peers_loop()
 {
-    int                  peerfd;
+    int                  peerfd, opt;
     struct sockaddr_in   connection_addr;
     struct connection   *conn;
     struct epoll_event   peer_event = {0};
@@ -87,6 +87,11 @@ accept_peers_loop()
             }
             break;
         } else {
+            opt = 1;
+            if (setsockopt(peerfd, SOL_TCP, TCP_NODELAY, &opt, sizeof(opt))) {
+                errx(1, "setsockopt()");
+            }
+
             conn = xmalloc(sizeof(struct connection));
             conn->fd = peerfd;
             conn->last_active = last_active;

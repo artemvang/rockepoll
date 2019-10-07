@@ -223,7 +223,6 @@ get_file_stats(char *target, struct file_stats *st)
 }
 
 
-
 static inline __attribute__((always_inline)) char
 decode_hex_digit(char ch)
 {
@@ -236,6 +235,7 @@ decode_hex_digit(char ch)
 
     return hex_digit_tbl[(unsigned char)ch];
 }
+
 
 static void
 url_decode(char *target)
