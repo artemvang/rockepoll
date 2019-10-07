@@ -458,7 +458,6 @@ build_response(struct connection *conn)
     struct file_meta *file_meta;
     struct header_meta *header_meta;
     char last_modified_timestamp[TIMESTAMP_SIZE] = {0};
-    char date_timestamp[TIMESTAMP_SIZE] = {0};
 
     req = conn->steps->meta;
 
@@ -539,7 +538,6 @@ build_response(struct connection *conn)
         );
     }
 
-    timestamp(time(NULL), date_timestamp);
     timestamp(st.time_mod.tv_sec, last_modified_timestamp);
 
     header_meta = xmalloc(sizeof(struct header_meta));
@@ -548,7 +546,7 @@ build_response(struct connection *conn)
             "Accept-Ranges: bytes\r\n"
             "Content-Type: %s\r\n"
             "Content-Length: %lld\r\n"
-            "Date: %s\r\n"
+            // "Date: %s\r\n"
             "Last-Modified: %s\r\n"
             "%s"
             "%s"
@@ -556,7 +554,6 @@ build_response(struct connection *conn)
             resp_status, http_status_str[resp_status],
             st.mime,
             (long long)content_length,
-            date_timestamp,
             last_modified_timestamp,
             content_range,
             (conn->keep_alive) ? "Connection: keep-alive\r\n" : "Connection: close\r\n"
