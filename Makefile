@@ -1,7 +1,7 @@
 include config.mk
 
 
-SRC = server.c utils.c io.c handler.c
+SRC = server.c utils.c io.c http.c murmurhash.c
 OBJ = ${SRC:.c=.o}
 
 
