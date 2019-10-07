@@ -16,7 +16,7 @@
 #include "utils.h"
 
 
-#define MAXFDS 1024 * 4
+#define MAXFDS 1024
 
 
 char *argv0;
@@ -82,12 +82,10 @@ accept_peers_loop()
                          &connection_addr_len, SOCK_NONBLOCK);
 
         if (peerfd < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                break;
-            } else {
+            if (likely(errno != EAGAIN && errno != EWOULDBLOCK)) {
                 warnx("accept4()");
-                return;
             }
+            break;
         } else {
             conn = xmalloc(sizeof(struct connection));
             conn->fd = peerfd;
@@ -101,7 +99,7 @@ accept_peers_loop()
 
             peer_event.data.fd = peerfd;
             peer_event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
-            if (epoll_ctl(epollfd, EPOLL_CTL_ADD, peerfd, &peer_event) < 0) {
+            if (unlikely(epoll_ctl(epollfd, EPOLL_CTL_ADD, peerfd, &peer_event) < 0)) {
                 warnx("epoll_ctl(), can't add peer socket to epoll");
                 close(peerfd);
                 continue;
@@ -192,7 +190,7 @@ main(int argc, char *argv[])
         accepting = max_fd + 1 < MAXFDS;
 
         nready = epoll_wait(epollfd, events, MAXFDS, 60000);
-        if (nready < 0) {
+        if (unlikely(nready < 0)) {
             warnx("epoll_wait()");
             continue;
         }

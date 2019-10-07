@@ -29,10 +29,10 @@ read_request_io_step(struct connection *conn)
     struct raw_request *req = conn->steps->meta;
 
     do {
-        read_size = recv(conn->fd, req->data + req->size, MIN(REQ_BUF_SIZE, MAX_REQ_SIZE - req->size), 0);
+        read_size = read(conn->fd, req->data + req->size, MIN(REQ_BUF_SIZE, MAX_REQ_SIZE - req->size));
 
         if (read_size < 1) {
-            if (read_size < 0 && errno == EAGAIN) {
+            if (likely(read_size < 0 && errno == EAGAIN)) {
                 return IO_AGAIN;
             }
 
@@ -43,7 +43,7 @@ read_request_io_step(struct connection *conn)
 
     } while (read_size == REQ_BUF_SIZE && req->size < MAX_REQ_SIZE);
 
-    if (!req->size || req->size == MAX_REQ_SIZE) {
+    if (unlikely(!req->size || req->size == MAX_REQ_SIZE)) {
         return IO_ERROR;
     } else {
         req->data[req->size] = '\0';
@@ -85,6 +85,7 @@ process_connection(struct connection *conn)
             LL_MOVE_NEXT(conn->steps);
             if (!conn->steps && conn->keep_alive) {
                 setup_read_io_step(conn);
+                run = 0;
             }
 
             if (!conn->steps) {
