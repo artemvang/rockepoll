@@ -39,7 +39,7 @@ struct file_stats {
     int fd;
     char *mime;
     off_t size;
-    char hash[40];
+    char etag[64];
 };
 
 

@@ -13,7 +13,6 @@
 #include "io.h"
 #include "utils.h"
 #include "http.h"
-#include "murmurhash.h"
 
 #define DEFAULT_MIMETYPE "application/octet-stream"
 
@@ -105,7 +104,6 @@ static enum http_status
 get_file_stats(char *target, struct file_stats *st)
 {
     struct stat st_buf;
-    unsigned long hs;
 
     st->mime = get_url_mimetype(target);
 
@@ -125,9 +123,7 @@ get_file_stats(char *target, struct file_stats *st)
     }
 
     st->size = st_buf.st_size;
-    hs = murmurhash((char *)&st_buf, sizeof(st_buf), 1337);
-
-    sprintf(st->hash, "%lu", hs);
+    sprintf(st->etag, "%ld-%ld", st_buf.st_mtim.tv_sec, st_buf.st_size);
 
     return S_OK;
 }
@@ -313,7 +309,7 @@ build_response(struct connection *conn)
         return;
     }
 
-    if (r.headers[H_IF_MATCH] && !strcmp(st.hash, r.headers[H_IF_MATCH])) {
+    if (r.headers[H_IF_MATCH] && !strcmp(st.etag, r.headers[H_IF_MATCH])) {
         build_http_status_step(S_NOT_MODIFIED, conn);
         return;
     }
@@ -379,7 +375,7 @@ build_response(struct connection *conn)
             resp_status, http_status_str[resp_status],
             st.mime,
             (long long)content_length,
-            st.hash,
+            st.etag,
             content_range,
             (conn->keep_alive) ? "Connection: keep-alive\r\n" : "Connection: close\r\n"
     );
