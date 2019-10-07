@@ -12,6 +12,9 @@
 # define unused
 #endif
 
+#define unlikely(expr) __builtin_expect(!!(expr), 0)
+#define likely(expr) __builtin_expect(!!(expr), 1)
+
 
 void *xmalloc(const size_t size);
 void *xrealloc(void *original, const size_t size);
