@@ -11,15 +11,15 @@
 
 
 #define LL_PUSH(head,item)       \
-do {                               \
-    __typeof(item) _tmp;             \
+do { \
+    __typeof(item) _tmp; \
     if (head) { \
-        _tmp = (head);    \
-    while (_tmp->next) _tmp = _tmp->next; \
-        _tmp->next=(item);       \
-    } else {               \
-        (head)=(item);          \
-    }                              \
+        _tmp = (head); \
+        while (_tmp->next) _tmp = _tmp->next; \
+        _tmp->next=(item); \
+    } else { \
+        (head)=(item); \
+    } \
 } while (0)
 
 #define LL_MOVE_NEXT(head) \
@@ -41,8 +41,20 @@ enum io_step_status {IO_OK, IO_AGAIN, IO_ERROR};
 enum conn_status {C_RUN, C_CLOSE};
 
 
-struct raw_request {
-    off_t size;
+struct send_meta {
+    size_t size;
+    char *data;
+};
+
+
+struct sendfile_meta {
+    off_t start_offset, end_offset, size;
+    int infd;
+};
+
+
+struct read_meta {
+    size_t size;
     char data[MAX_REQ_SIZE];
 };
 
@@ -51,7 +63,7 @@ struct connection;
 
 struct io_step {
     void *meta;
-    enum io_step_status (*handler)(struct connection *conn);
+    enum io_step_status (*action)(struct connection *conn);
     void (*cleanup)(void *meta);
     struct io_step *next;
 };
@@ -66,6 +78,8 @@ struct connection {
 
 void process_connection(struct connection *conn);
 void setup_read_io_step(struct connection *conn);
+void setup_send_io_step(struct connection *conn, char *data, size_t size);
+void setup_sendfile_io_step(struct connection *conn, int infd, off_t lower, off_t upper, off_t size);
 
 
 #endif
