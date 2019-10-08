@@ -1,14 +1,11 @@
 #include <arpa/inet.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
-#include <time.h>
 #include <err.h>
 
 #include "arg.h"
@@ -17,26 +14,24 @@
 
 
 #define MAXFDS 1024
+#define KEEP_ALIVE_TIMEOUT 60
 
 
 char *argv0;
 
-static int listenfd, epollfd;
-static int accepting = 1;
-static int max_fd = 0;
+static int listenfd, epollfd, accepting = 1;
 static volatile int loop = 1;
-static struct connection **connections;
 
-/* defaults */
-static int port = 7887;
-static char *listen_addr = "127.0.0.1";
-static int keep_alive = 0;
+/* parameters from command line */
+static int port = 7887; 
+static int keep_alive = 1; 
+static char *listen_addr = "127.0.0.1"; 
 
 
 static void
 create_listen_socket()
 {
-    int opt;
+    int    opt;
     struct sockaddr_in addr;
 
     listenfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
@@ -64,8 +59,8 @@ create_listen_socket()
 }
 
 
-static void
-accept_peers_loop()
+static int
+accept_peers_loop(int maxfd, struct connection *connections[])
 {
     int                  peerfd, opt;
     struct sockaddr_in   connection_addr;
@@ -82,14 +77,14 @@ accept_peers_loop()
                          &connection_addr_len, SOCK_NONBLOCK);
 
         if (peerfd < 0) {
-            if (likely(errno != EAGAIN && errno != EWOULDBLOCK)) {
+            if (LIKELY(errno != EAGAIN && errno != EWOULDBLOCK)) {
                 warnx("accept4()");
             }
             break;
         } else {
             opt = 1;
-            if (setsockopt(peerfd, SOL_TCP, TCP_NODELAY, &opt, sizeof(opt))) {
-                errx(1, "setsockopt()");
+            if (UNLIKELY(setsockopt(peerfd, SOL_TCP, TCP_NODELAY, &opt, sizeof(opt)))) {
+                errx(1, "setsockopt(), can't set TCP_NODELAY for peer socket");
             }
 
             conn = xmalloc(sizeof(struct connection));
@@ -105,16 +100,18 @@ accept_peers_loop()
 
             peer_event.data.fd = peerfd;
             peer_event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
-            if (unlikely(epoll_ctl(epollfd, EPOLL_CTL_ADD, peerfd, &peer_event) < 0)) {
+            if (UNLIKELY(epoll_ctl(epollfd, EPOLL_CTL_ADD, peerfd, &peer_event) < 0)) {
                 warnx("epoll_ctl(), can't add peer socket to epoll");
                 close(peerfd);
                 continue;
             }
 
-            max_fd = MAX(max_fd, peerfd);
-            accepting = max_fd + 1 < MAXFDS;
+            maxfd = MAX(maxfd, peerfd);
+            accepting = maxfd + 1 < MAXFDS;
         }
     }
+
+    return maxfd;
 }
 
 static inline void
@@ -135,10 +132,12 @@ usage()
 int
 main(int argc, char *argv[])
 {
-    int nready, fd, i;
-    struct epoll_event ev, listen_event = {0};
-    struct epoll_event *events;
-    struct connection *conn;
+    int                  nready, fd, i, maxfd = 0;
+    time_t               now;
+    struct epoll_event   ev, listen_event = {0};
+    struct epoll_event   events[MAXFDS] = {0};
+    struct connection   *conn;
+    struct connection   *connections[MAXFDS] = {0};
 
     signal(SIGINT, int_handler);
     signal(SIGPIPE, SIG_IGN);
@@ -173,17 +172,14 @@ main(int argc, char *argv[])
         errx(1, "epoll_ctl(), can't add listen socket to epoll");
     }
 
-    events = xmalloc(sizeof(struct epoll_event) * MAXFDS);
-    connections = xmalloc(sizeof(struct connection *) * MAXFDS);
-
     while (loop) {
-        time_t now = time(NULL);
+        now = time(NULL);
 
-        for (fd = i = 5; fd <= max_fd; fd++) {
+        for (fd = i = epollfd + 1; fd <= maxfd; fd++) {
             conn = connections[fd];
-            if (conn)  {
-                if (conn->status == C_CLOSE ||
-                    difftime(now, conn->last_active) > 60)
+            if (conn) {
+                if (conn->status == C_CLOSE
+                    || difftime(now, conn->last_active) > KEEP_ALIVE_TIMEOUT)
                 {
                     close(fd);
                     LL_CLEAN(conn->steps);
@@ -195,11 +191,11 @@ main(int argc, char *argv[])
             }
         }
 
-        max_fd = i;
-        accepting = max_fd + 1 < MAXFDS;
+        maxfd = i;
+        accepting = maxfd + 1 < MAXFDS;
 
-        nready = epoll_wait(epollfd, events, MAXFDS, 60000);
-        if (unlikely(nready < 0)) {
+        nready = epoll_wait(epollfd, events, MAXFDS, KEEP_ALIVE_TIMEOUT * 1000);
+        if (UNLIKELY(nready < 0)) {
             warnx("epoll_wait()");
             continue;
         }
@@ -210,7 +206,7 @@ main(int argc, char *argv[])
             conn = connections[fd];
 
             if (fd == listenfd) {
-                accept_peers_loop();
+                maxfd = accept_peers_loop(maxfd, connections);
             }
             else if (
                 ev.events & EPOLLHUP ||
@@ -221,13 +217,10 @@ main(int argc, char *argv[])
             }
             else {
                 process_connection(conn);
-                conn->last_active = time(NULL);
+                conn->last_active = now;
             }
         }
     }
-
-    free(events);
-    free(connections);
 
     close(epollfd);
     close(listenfd);

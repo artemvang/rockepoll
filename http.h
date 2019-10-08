@@ -33,7 +33,6 @@ enum http_header {
 
 struct http_request {
     char *target;
-
     char *headers[HEADERS_COUNT];
 };
 

@@ -1,23 +1,19 @@
-#include <unistd.h>
 #include <errno.h>
 #include <string.h>
-#include <stdlib.h>
 #include <stdio.h>
-#include <sys/sendfile.h>
+#include <unistd.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <fcntl.h>
-#include <sys/uio.h>
-#include <sys/socket.h>
 
 #include "io.h"
 #include "utils.h"
 #include "http.h"
 
-#define DEFAULT_MIMETYPE "application/octet-stream"
 
+#define DEFAULT_MIMETYPE "application/octet-stream"
 #define HEADER_ENTRY(__enum, __str) \
     [__enum] = {.name=__str, .size=sizeof(__str) - 1}
+
 
 static const struct {
     char *ext;
@@ -129,8 +125,8 @@ get_file_stats(char *target, struct file_stats *st)
 }
 
 
-static inline __attribute__((always_inline)) char
-decode_hex_digit(char ch)
+static ALWAYS_INLINE char
+decode_hex_digit(int ch)
 {
     static const char hex_digit_tbl[256] = {
         ['0'] = 0,  ['1'] = 1,  ['2'] = 2,  ['3'] = 3,  ['4'] = 4,  ['5'] = 5,
@@ -139,26 +135,27 @@ decode_hex_digit(char ch)
         ['C'] = 12, ['D'] = 13, ['E'] = 14, ['F'] = 15,
     };
 
-    return hex_digit_tbl[(unsigned char)ch];
+    return hex_digit_tbl[ch];
 }
 
 
 static void
 url_decode(char *target)
 {
-    char tmp;
     char *ch, *decoded;
 
     for (decoded = ch = target; *ch; ch++) {
-        if (*ch == '%') {
-            tmp = (char)(decode_hex_digit(ch[1]) << 4 | decode_hex_digit(ch[2]));
-
-            *decoded++ = tmp;
+        switch (*ch) {
+        case '%':
+            *decoded++ = decode_hex_digit(ch[1]) << 4 | decode_hex_digit(ch[2]);
             ch += 2;
-        } else if (*ch == '+') {
+            break;
+        case '+':
             *decoded++ = ' ';
-        } else {
+            break;
+        default:
             *decoded++ = *ch;
+            break;
         }
     }
 
@@ -178,13 +175,13 @@ parse_request(char *raw_content, struct http_request *r)
 
     p += sizeof("GET") - 1;
 
-    if (unlikely(*(p++) != ' ')) {
+    if (UNLIKELY(*(p++) != ' ')) {
         return S_BAD_REQUEST;
     }
 
     /* skip / */
     p++;
-    if (unlikely(!(q = strchr(p, ' ')))) {
+    if (UNLIKELY(!(q = strchr(p, ' ')))) {
         return S_BAD_REQUEST;
     }
 
@@ -195,33 +192,34 @@ parse_request(char *raw_content, struct http_request *r)
     p = q;
 
     /* HTTP-VERSION */
-    if (unlikely(strncmp(p, "HTTP/1.", sizeof("HTTP/1.") - 1))) {
+    if (UNLIKELY(strncmp(p, "HTTP/1.", sizeof("HTTP/1.") - 1))) {
         return S_BAD_REQUEST;
     }
 
     p += sizeof("HTTP/1.") - 1;
-    if (unlikely(*p != '1' && *p != '0')) {
+    if (UNLIKELY(*p != '1' && *p != '0')) {
         return S_VERSION_NOT_SUPPORTED;
     }
 
     p++;
 
     /* check terminator */
-    if (unlikely(strncmp(p, "\r\n", sizeof("\r\n") - 1))) {
+    if (UNLIKELY(strncmp(p, "\r\n", sizeof("\r\n") - 1))) {
         return S_BAD_REQUEST;
     }
 
     p += sizeof("\r\n") - 1;
 
-    while (unlikely(strncmp(p, "\r\n", sizeof("\r\n") - 1))) {
+    while (strncmp(p, "\r\n", sizeof("\r\n") - 1)) {
         for (i = 0; i < HEADERS_COUNT; i++) {
+            __builtin_prefetch(&http_headers[i], 0, 0);
             if (!strncmp(p, http_headers[i].name, http_headers[i].size)) {
                 break;
             }
         }
 
         if (i == HEADERS_COUNT) {
-            if (unlikely(!(q = strchr(p, '\r')))) {
+            if (UNLIKELY(!(q = strchr(p, '\r')))) {
                 return S_BAD_REQUEST;
             }
 
@@ -232,7 +230,7 @@ parse_request(char *raw_content, struct http_request *r)
         p += http_headers[i].size;
 
         /* a single colon must follow the field name */
-        if (unlikely(*p != ':')) {
+        if (UNLIKELY(*p != ':')) {
             return S_BAD_REQUEST;
         }
 
@@ -240,7 +238,7 @@ parse_request(char *raw_content, struct http_request *r)
         for (++p; *p == ' ' || *p == '\t'; p++) ;
 
         /* extract field content */
-        if (unlikely(!(q = strchr(p, '\r')))) {
+        if (UNLIKELY(!(q = strchr(p, '\r')))) {
             return S_BAD_REQUEST;
         }
 
@@ -294,7 +292,7 @@ build_response(struct connection *conn)
     req = conn->steps->meta;
 
     resp_status = parse_request(req->data, &r);
-    if (unlikely(resp_status != S_OK)) {
+    if (UNLIKELY(resp_status != S_OK)) {
         build_http_status_step(resp_status, conn);
         return;
     }
@@ -321,14 +319,14 @@ build_response(struct connection *conn)
     if (r.headers[H_RANGE]) {
         p = r.headers[H_RANGE];
 
-        if (unlikely(strncmp(p, "bytes=", sizeof("bytes=") - 1))) {
+        if (UNLIKELY(strncmp(p, "bytes=", sizeof("bytes=") - 1))) {
             build_http_status_step(S_BAD_REQUEST, conn);
             return;
         }
 
         p += sizeof("bytes=") - 1;
 
-        if (unlikely(!(q = strchr(p, '-')))) {
+        if (UNLIKELY(!(q = strchr(p, '-')))) {
             build_http_status_step(S_BAD_REQUEST, conn);
             return;
         }
@@ -343,7 +341,7 @@ build_response(struct connection *conn)
             upper = strtoull(q, NULL, 10);
         }
 
-        if (unlikely(lower < 0 || upper < 0 || lower > upper)) {
+        if (UNLIKELY(lower < 0 || upper < 0 || lower > upper)) {
             build_http_status_step(S_RANGE_NOT_SATISFIABLE, conn);
             return;
         }

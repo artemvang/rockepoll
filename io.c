@@ -1,12 +1,7 @@
 #include <errno.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/sendfile.h>
 #include <unistd.h>
-#include <stdio.h>
 #include <sys/socket.h>
-#include <netinet/tcp.h>
-#include <netinet/in.h>
+#include <sys/sendfile.h>
 
 #include "io.h"
 #include "utils.h"
@@ -27,14 +22,14 @@
     } while(0);
 
 
-static inline void
+static ALWAYS_INLINE void
 cleanup_read_action(void *meta)
 {
     free(meta);
 }
 
 
-static inline void
+static ALWAYS_INLINE void
 cleanup_send_action(void *meta)
 {
     struct send_meta *h = meta;
@@ -42,7 +37,7 @@ cleanup_send_action(void *meta)
     free(meta);
 }
 
-static inline void
+static ALWAYS_INLINE void
 cleanup_sendfile_action(void *meta)
 {   
     struct sendfile_meta *f = meta;
@@ -62,8 +57,8 @@ perform_sendfile_action(struct connection *conn)
     do {
         size = MIN(SENDFILE_CHUNK_SIZE, meta->size);
         sent_len = sendfile(conn->fd, meta->infd, &(meta->start_offset), size);
-        if (unlikely(sent_len < 0)) {
-            if (likely(errno == EAGAIN)) {
+        if (sent_len < 0) {
+            if (LIKELY(errno == EAGAIN)) {
                 return IO_AGAIN;
             }
 
@@ -85,8 +80,8 @@ perform_send_action(struct connection *conn)
 
     meta = conn->steps->meta;
     write_size = send(conn->fd, meta->data, meta->size, 0);
-    if (unlikely(write_size < 0)) {
-        if (likely(errno == EAGAIN)) {
+    if (write_size < 0) {
+        if (LIKELY(errno == EAGAIN)) {
             return IO_AGAIN;
         }
 
@@ -108,7 +103,7 @@ perform_read_action(struct connection *conn)
         read_size = read(conn->fd, req->data + req->size, MIN(REQ_BUF_SIZE, MAX_REQ_SIZE - req->size));
 
         if (read_size < 1) {
-            if (likely(read_size < 0 && errno == EAGAIN)) {
+            if (LIKELY(read_size < 0 && errno == EAGAIN)) {
                 return IO_AGAIN;
             }
 
@@ -119,7 +114,7 @@ perform_read_action(struct connection *conn)
 
     } while (read_size == REQ_BUF_SIZE && req->size < MAX_REQ_SIZE);
 
-    if (unlikely(!req->size || req->size == MAX_REQ_SIZE)) {
+    if (UNLIKELY(!req->size || req->size == MAX_REQ_SIZE)) {
         return IO_ERROR;
     } else {
         req->data[req->size] = '\0';
@@ -130,7 +125,7 @@ perform_read_action(struct connection *conn)
 }
 
 
-inline __attribute__((always_inline)) void
+inline ALWAYS_INLINE void
 setup_sendfile_io_step(struct connection *conn, int infd, off_t lower, off_t upper, off_t size)
 {
     struct sendfile_meta *meta = xmalloc(sizeof(struct sendfile_meta));
@@ -143,7 +138,7 @@ setup_sendfile_io_step(struct connection *conn, int infd, off_t lower, off_t upp
 }
 
 
-inline __attribute__((always_inline)) void
+inline ALWAYS_INLINE void
 setup_send_io_step(struct connection *conn, char* data, size_t size) {
     struct send_meta *meta = xmalloc(sizeof(struct send_meta));
     meta->data = data;
@@ -153,7 +148,7 @@ setup_send_io_step(struct connection *conn, char* data, size_t size) {
 }
 
 
-inline __attribute__((always_inline)) void
+inline ALWAYS_INLINE void
 setup_read_io_step(struct connection *conn)
 {
     struct read_meta *meta = xmalloc(sizeof(struct read_meta));
