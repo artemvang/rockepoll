@@ -1,38 +1,111 @@
 #include <errno.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/sendfile.h>
 #include <unistd.h>
-#include <stdio.h>
 #include <sys/socket.h>
-#include <netinet/tcp.h>
-#include <netinet/in.h>
+#include <sys/sendfile.h>
+#include <fcntl.h>
 
 #include "io.h"
 #include "utils.h"
-#include "handler.h"
+#include "list.h"
 
 #define REQ_BUF_SIZE 1024
+#define SENDFILE_CHUNK_SIZE 1024 * 512
 
 
-static inline void
-cleanup_request(void *meta)
+#define BUILD_IO_STEP(__step_type) \
+    do { \
+        struct io_step *__step = xmalloc(sizeof(struct io_step)); \
+        __step->meta = meta; \
+        __step->step = make_ ## __step_type ## _step; \
+        __step->handle = handler; \
+        __step->clean = clean_ ## __step_type ## _step; \
+        __step->next = NULL; \
+        LL_APPEND(conn->steps, __step); \
+    } while(0);
+
+
+static ALWAYS_INLINE void
+clean_read_step(void *meta)
 {
     free(meta);
 }
 
 
-static enum io_step_status
-read_request_io_step(struct connection *conn)
+static ALWAYS_INLINE void
+clean_send_step(void *meta)
 {
-    ssize_t read_size;
-    struct raw_request *req = conn->steps->meta;
+    struct send_meta *h = meta;
+    free(h->data);
+    free(meta);
+}
+
+static ALWAYS_INLINE void
+clean_sendfile_step(void *meta)
+{   
+    struct sendfile_meta *f = meta;
+    close(f->infd);
+    free(meta);
+}
+
+static enum io_step_status
+make_sendfile_step(struct connection *conn)
+{
+    off_t size;
+    ssize_t sent_len;
+    struct sendfile_meta *meta;
+
+    meta = conn->steps->meta;
 
     do {
-        read_size = recv(conn->fd, req->data + req->size, MIN(REQ_BUF_SIZE, MAX_REQ_SIZE - req->size), 0);
+        size = MIN(SENDFILE_CHUNK_SIZE, meta->size);
+        sent_len = sendfile(conn->fd, meta->infd, &(meta->start_offset), size);
+        if (sent_len < 0) {
+            if (LIKELY(errno == EAGAIN)) {
+                return IO_AGAIN;
+            }
+
+            return IO_ERROR;
+        }
+
+        meta->size -= sent_len;
+    } while (meta->start_offset < meta->end_offset);
+
+    return IO_OK;
+}
+
+
+static enum io_step_status
+make_send_step(struct connection *conn)
+{
+    ssize_t write_size;
+    struct send_meta *meta;
+
+    meta = conn->steps->meta;
+    write_size = send(conn->fd, meta->data, meta->size, 0);
+    if (write_size < 0) {
+        if (LIKELY(errno == EAGAIN)) {
+            return IO_AGAIN;
+        }
+
+        return IO_ERROR;
+    }
+
+    return IO_OK;
+}
+
+
+static enum io_step_status
+make_read_step(struct connection *conn)
+{
+    ssize_t read_size;
+    struct read_meta *req;
+
+    req = conn->steps->meta;
+    do {
+        read_size = read(conn->fd, req->data + req->size, MIN(REQ_BUF_SIZE, MAX_REQ_SIZE - req->size));
 
         if (read_size < 1) {
-            if (read_size < 0 && errno == EAGAIN) {
+            if (LIKELY(read_size < 0 && errno == EAGAIN)) {
                 return IO_AGAIN;
             }
 
@@ -43,31 +116,51 @@ read_request_io_step(struct connection *conn)
 
     } while (read_size == REQ_BUF_SIZE && req->size < MAX_REQ_SIZE);
 
-    if (!req->size || req->size == MAX_REQ_SIZE) {
+    if (UNLIKELY(!req->size || req->size == MAX_REQ_SIZE)) {
         return IO_ERROR;
-    } else {
-        req->data[req->size] = '\0';
-        build_response(conn);
     }
+    req->data[req->size] = '\0';
 
     return IO_OK;
 }
 
 
-void
-setup_read_io_step(struct connection *conn)
+inline ALWAYS_INLINE void
+setup_sendfile_io_step(struct connection *conn,
+                       int infd, off_t lower, off_t upper, off_t size,
+                       enum conn_status (*handler)(struct connection *conn))
 {
-    struct raw_request *req;
+    struct sendfile_meta *meta = xmalloc(sizeof(struct sendfile_meta));
+    meta->infd = infd;
+    meta->start_offset = lower;
+    meta->end_offset = upper;
+    meta->size = size;
 
-    conn->steps = xmalloc(sizeof(struct io_step));
+    BUILD_IO_STEP(sendfile);
+}
 
-    req = xmalloc(sizeof(struct raw_request));
-    req->size = 0;
-    conn->steps->meta = req;
 
-    conn->steps->handler = read_request_io_step;
-    conn->steps->cleanup = cleanup_request;
-    conn->steps->next = NULL;
+inline ALWAYS_INLINE void
+setup_send_io_step(struct connection *conn,
+                   char* data, size_t size,
+                   enum conn_status (*handler)(struct connection *conn))
+{
+    struct send_meta *meta = xmalloc(sizeof(struct send_meta));
+    meta->data = data;
+    meta->size = size;
+
+    BUILD_IO_STEP(send);
+}
+
+
+inline ALWAYS_INLINE void
+setup_read_io_step(struct connection *conn,
+                   enum conn_status (*handler)(struct connection *conn))
+{
+    struct read_meta *meta = xmalloc(sizeof(struct read_meta));
+    meta->size = 0;
+
+    BUILD_IO_STEP(read);
 }
 
 
@@ -78,15 +171,14 @@ process_connection(struct connection *conn)
     enum io_step_status s;
 
     while (run && conn->steps) {
-        s = (*conn->steps->handler)(conn);
+        s = (*conn->steps->step)(conn);
 
         switch(s) {
         case IO_OK:
-            LL_MOVE_NEXT(conn->steps);
-            if (!conn->steps && conn->keep_alive) {
-                setup_read_io_step(conn);
+            if (*conn->steps->handle && (*conn->steps->handle)(conn) == C_CLOSE) {
+                run = 0;
             }
-
+            LL_MOVE_NEXT(conn->steps, CLEAN_STEP);
             if (!conn->steps) {
                 conn->status = C_CLOSE;
                 run = 0;

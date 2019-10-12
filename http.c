@@ -1,74 +1,20 @@
-#include <unistd.h>
 #include <errno.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <sys/sendfile.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 #include <fcntl.h>
-#include <sys/uio.h>
+#include <string.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #include "io.h"
 #include "utils.h"
-#include "handler.h"
+#include "http.h"
 
 
 #define DEFAULT_MIMETYPE "application/octet-stream"
-#define SENDFILE_CHUNK_SIZE 1024 * 512
-#define TIMESTAMP_SIZE 64
+#define HEADER_ENTRY(__enum, __str) \
+    [__enum] = { .name=__str, .size=sizeof(__str) - 1 }
 
 
-enum http_status {
-    S_OK                     = 200,
-    S_PARTIAL_CONTENT        = 206,
-    S_NOT_FOUND              = 404,
-    S_METHOD_NOT_ALLOWED     = 405,
-    S_RANGE_NOT_SATISFIABLE  = 416,
-    S_BAD_REQUEST            = 400,
-    S_FORBIDDEN              = 403,
-    S_REQUEST_TOO_LARGE      = 413,
-    S_INTERNAL_ERROR         = 500,
-    S_VERSION_NOT_SUPPORTED  = 505,
-    S_NOT_MODIFIED           = 304,
-};
-
-
-enum http_header {
-    H_RANGE,
-    H_IF_MOD,
-    H_CONNECTION,
-    HEADERS_COUNT,
-};
-
-
-struct http_request {
-    char *target;
-
-    char *headers[HEADERS_COUNT];
-};
-
-
-struct file_stats {
-    int fd;
-    char *mime;
-    off_t size;
-    struct timespec time_mod;
-};
-
-
-struct header_meta {
-    int size;
-    char *data;
-};
-
-
-struct file_meta {
-    off_t start_offset, end_offset, size;
-    int infd;
-};
-
-/* mime types */
 static const struct {
     char *ext;
     char *type;
@@ -119,17 +65,10 @@ static const struct {
     char *name;
     size_t size;
 } http_headers[] = {
-    [H_RANGE]       = {.name="Range",             .size=sizeof("Range") - 1},
-    [H_CONNECTION]  = {.name="Connection",        .size=sizeof("Connection") - 1},
-    [H_IF_MOD]      = {.name="If-Modified-Since", .size=sizeof("If-Modified-Since") - 1},
+    HEADER_ENTRY(H_RANGE,      "Range"),
+    HEADER_ENTRY(H_CONNECTION, "Connection"),
+    HEADER_ENTRY(H_IF_MATCH,   "If-Match"),
 };
-
-
-static inline void
-timestamp(time_t t, char *buf)
-{   
-    strftime(buf, TIMESTAMP_SIZE, "%a, %d %b %Y %T GMT", gmtime(&t));
-}
 
 
 static char *
@@ -164,7 +103,7 @@ get_file_stats(char *target, struct file_stats *st)
 
     st->mime = get_url_mimetype(target);
 
-    if ((st->fd = open(target, O_RDONLY | O_NONBLOCK)) < 0) {
+    if ((st->fd = open(target, O_LARGEFILE | O_RDONLY | O_NONBLOCK)) < 0) {
         return (errno == EACCES) ? S_FORBIDDEN : S_NOT_FOUND;
     }
 
@@ -180,28 +119,47 @@ get_file_stats(char *target, struct file_stats *st)
     }
 
     st->size = st_buf.st_size;
-    st->time_mod = st_buf.st_mtim;
+    sprintf(st->etag, "%ld-%ld", st_buf.st_mtim.tv_sec, st_buf.st_size);
 
     return S_OK;
 }
 
 
-static void
-decode(char *src, char *dest)
+static ALWAYS_INLINE char
+decode_hex_digit(int ch)
 {
-    size_t i;
-    unsigned char n;
-    char *s;
+    static const char hex_digit_tbl[256] = {
+        ['0'] = 0,  ['1'] = 1,  ['2'] = 2,  ['3'] = 3,  ['4'] = 4,  ['5'] = 5,
+        ['6'] = 6,  ['7'] = 7,  ['8'] = 8,  ['9'] = 9,  ['a'] = 10, ['b'] = 11,
+        ['c'] = 12, ['d'] = 13, ['e'] = 14, ['f'] = 15, ['A'] = 10, ['B'] = 11,
+        ['C'] = 12, ['D'] = 13, ['E'] = 14, ['F'] = 15,
+    };
 
-    for (s = src, i = 0; *s; s++, i++) {
-        if (*s == '%' && (sscanf(s + 1, "%2hhx", &n) == 1)) {
-            dest[i] = n;
-            s += 2;
-        } else {
-            dest[i] = *s;
+    return hex_digit_tbl[ch];
+}
+
+
+static void
+url_decode(char *target)
+{
+    char *ch, *decoded;
+
+    for (decoded = ch = target; *ch; ch++) {
+        switch (*ch) {
+        case '%':
+            *decoded++ = decode_hex_digit(ch[1]) << 4 | decode_hex_digit(ch[2]);
+            ch += 2;
+            break;
+        case '+':
+            *decoded++ = ' ';
+            break;
+        default:
+            *decoded++ = *ch;
+            break;
         }
     }
-    dest[i] = '\0';
+
+    *decoded = '\0';
 }
 
 
@@ -217,36 +175,36 @@ parse_request(char *raw_content, struct http_request *r)
 
     p += sizeof("GET") - 1;
 
-    if (*(p++) != ' ') {
+    if (UNLIKELY(*(p++) != ' ')) {
         return S_BAD_REQUEST;
     }
 
     /* skip / */
     p++;
-    if (!(q = strchr(p, ' '))) {
+    if (UNLIKELY(!(q = strchr(p, ' ')))) {
         return S_BAD_REQUEST;
     }
 
     *(q++) = '\0';
     r->target = p;
-    decode(r->target, r->target);
+    url_decode(r->target);
 
     p = q;
 
     /* HTTP-VERSION */
-    if (strncmp(p, "HTTP/1.", sizeof("HTTP/1.") - 1)) {
+    if (UNLIKELY(strncmp(p, "HTTP/1.", sizeof("HTTP/1.") - 1))) {
         return S_BAD_REQUEST;
     }
 
     p += sizeof("HTTP/1.") - 1;
-    if (*p != '1' && *p != '0') {
+    if (UNLIKELY(*p != '1' && *p != '0')) {
         return S_VERSION_NOT_SUPPORTED;
     }
 
     p++;
 
     /* check terminator */
-    if (strncmp(p, "\r\n", sizeof("\r\n") - 1)) {
+    if (UNLIKELY(strncmp(p, "\r\n", sizeof("\r\n") - 1))) {
         return S_BAD_REQUEST;
     }
 
@@ -260,7 +218,7 @@ parse_request(char *raw_content, struct http_request *r)
         }
 
         if (i == HEADERS_COUNT) {
-            if (!(q = strchr(p, '\r'))) {
+            if (UNLIKELY(!(q = strchr(p, '\r')))) {
                 return S_BAD_REQUEST;
             }
 
@@ -271,7 +229,7 @@ parse_request(char *raw_content, struct http_request *r)
         p += http_headers[i].size;
 
         /* a single colon must follow the field name */
-        if (*p != ':') {
+        if (UNLIKELY(*p != ':')) {
             return S_BAD_REQUEST;
         }
 
@@ -279,7 +237,7 @@ parse_request(char *raw_content, struct http_request *r)
         for (++p; *p == ' ' || *p == '\t'; p++) ;
 
         /* extract field content */
-        if (!(q = strchr(p, '\r'))) {
+        if (UNLIKELY(!(q = strchr(p, '\r')))) {
             return S_BAD_REQUEST;
         }
 
@@ -294,80 +252,25 @@ parse_request(char *raw_content, struct http_request *r)
 }
 
 
-static inline void
-cleanup_header(void *meta)
+static enum conn_status
+close_on_keep_alive(struct connection *conn)
 {
-    struct header_meta *h = meta;
-    free(h->data);
-    free(meta);
-}
-
-static inline void
-cleanup_file(void *meta)
-{   
-    struct file_meta *f = meta;
-    close(f->infd);
-    free(meta);
-}
-
-
-static enum io_step_status
-write_file(struct connection *conn)
-{   
-    off_t size;
-    ssize_t sent_len;
-    struct file_meta *meta;
-
-    meta = conn->steps->meta;
-    do {
-        size = MIN(SENDFILE_CHUNK_SIZE, meta->size);
-        sent_len = sendfile(conn->fd, meta->infd, &(meta->start_offset), size);
-        if (sent_len < 0) {
-            if (errno == EAGAIN) {
-                return IO_AGAIN;
-            }
-
-            return IO_ERROR;
-        }
-
-        meta->size -= sent_len;
-    } while (meta->start_offset < meta->end_offset);
-
-    return IO_OK;
-}
-
-
-static enum io_step_status
-write_header(struct connection *conn)
-{
-    ssize_t write_size;
-    struct header_meta *meta = conn->steps->meta;
-    struct iovec iov[] = {
-        {.iov_base=meta->data, .iov_len=meta->size}
-    };
-
-    write_size = writev(conn->fd, iov, 1);
-    if (write_size < 0) {
-        if (errno == EAGAIN) {
-            return IO_AGAIN;
-        }
-
-        return IO_ERROR;
+    if (conn->keep_alive) {
+        setup_read_io_step(conn, build_response);
+        return C_CLOSE;
     }
 
-    return IO_OK;
+    return C_RUN;
 }
 
 
 static void
 build_http_status_step(enum http_status status, struct connection *conn)
 {
-    struct io_step *step;
-    struct header_meta *meta;
+    char *data;
+    size_t wrote_size;
 
-    meta = xmalloc(sizeof(struct header_meta));
-
-    meta->size = asprintf(&(meta->data),
+    wrote_size = asprintf(&data,
             "HTTP/1.1 %d %s\r\n"
             "Content-Type: text/html; charset=utf-8\r\n"
             "Accept-Ranges: bytes\r\n"
@@ -381,39 +284,28 @@ build_http_status_step(enum http_status status, struct connection *conn)
             http_status_str[status]
     );
 
-    step = xmalloc(sizeof(struct io_step));
-    step->meta = meta;
-    step->handler = write_header;
-    step->cleanup = cleanup_header;
-    step->next = NULL;
-
-    LL_PUSH(conn->steps, step);
+    setup_send_io_step(conn, data, wrote_size, close_on_keep_alive);
 }
 
 
-void
+enum conn_status
 build_response(struct connection *conn)
 {
-    struct tm tm;
+    size_t wrote_size;
     off_t lower, upper, content_length;
     char *p, *q;
     char content_range[128] = {0};
     struct file_stats st = {0};
-    struct io_step *step;
     enum http_status resp_status;
     struct http_request r = {0};
-    struct raw_request *req;
-    struct file_meta *file_meta;
-    struct header_meta *header_meta;
-    char last_modified_timestamp[TIMESTAMP_SIZE] = {0};
-    char date_timestamp[TIMESTAMP_SIZE] = {0};
+    struct read_meta *req;
 
     req = conn->steps->meta;
 
     resp_status = parse_request(req->data, &r);
-    if (resp_status != S_OK) {
+    if (UNLIKELY(resp_status != S_OK)) {
         build_http_status_step(resp_status, conn);
-        return;
+        return C_RUN;
     }
 
     if (r.headers[H_CONNECTION] && !strcmp(r.headers[H_CONNECTION], "close")) {
@@ -423,19 +315,12 @@ build_response(struct connection *conn)
     resp_status = get_file_stats(r.target, &st);
     if (resp_status != S_OK) {
         build_http_status_step(resp_status, conn);
-        return;
+        return C_RUN;
     }
 
-    if (r.headers[H_IF_MOD]) {
-        if (!strptime(r.headers[H_IF_MOD], "%a, %d %b %Y %T GMT", &tm)) {
-            build_http_status_step(S_BAD_REQUEST, conn);
-            return;
-        }
-
-        if (difftime(st.time_mod.tv_sec, mktime(&tm)) <= 0) {
-            build_http_status_step(S_NOT_MODIFIED, conn);
-            return;
-        }
+    if (r.headers[H_IF_MATCH] && !strcmp(st.etag, r.headers[H_IF_MATCH])) {
+        build_http_status_step(S_NOT_MODIFIED, conn);
+        return C_RUN;
     }
 
     lower = 0;
@@ -445,16 +330,16 @@ build_response(struct connection *conn)
     if (r.headers[H_RANGE]) {
         p = r.headers[H_RANGE];
 
-        if (strncmp(p, "bytes=", sizeof("bytes=") - 1)) {
+        if (UNLIKELY(strncmp(p, "bytes=", sizeof("bytes=") - 1))) {
             build_http_status_step(S_BAD_REQUEST, conn);
-            return;
+            return C_RUN;
         }
 
         p += sizeof("bytes=") - 1;
 
-        if (!(q = strchr(p, '-'))) {
+        if (UNLIKELY(!(q = strchr(p, '-')))) {
             build_http_status_step(S_BAD_REQUEST, conn);
-            return;
+            return C_RUN;
         }
 
         *(q++) = '\0';
@@ -467,9 +352,9 @@ build_response(struct connection *conn)
             upper = strtoull(q, NULL, 10);
         }
 
-        if (lower < 0 || upper < 0 || lower > upper) {
+        if (UNLIKELY(lower < 0 || upper < 0 || lower > upper)) {
             build_http_status_step(S_RANGE_NOT_SATISFIABLE, conn);
-            return;
+            return C_RUN;
         }
 
         upper = MIN(upper, st.size - 1);
@@ -487,48 +372,25 @@ build_response(struct connection *conn)
         );
     }
 
-    timestamp(time(NULL), date_timestamp);
-    timestamp(st.time_mod.tv_sec, last_modified_timestamp);
-
-    header_meta = xmalloc(sizeof(struct header_meta));
-    header_meta->size = asprintf(&(header_meta->data),
+    wrote_size = asprintf(&p,
             "HTTP/1.1 %d %s\r\n"
             "Accept-Ranges: bytes\r\n"
             "Content-Type: %s\r\n"
             "Content-Length: %lld\r\n"
-            "Date: %s\r\n"
-            "Last-Modified: %s\r\n"
+            "ETag: \"%s\"\r\n"
             "%s"
             "%s"
             "\r\n",
             resp_status, http_status_str[resp_status],
             st.mime,
             (long long)content_length,
-            date_timestamp,
-            last_modified_timestamp,
+            st.etag,
             content_range,
             (conn->keep_alive) ? "Connection: keep-alive\r\n" : "Connection: close\r\n"
     );
 
-    step = xmalloc(sizeof(struct io_step));
-    step->meta = header_meta;
-    step->handler = write_header;
-    step->cleanup = cleanup_header;
-    step->next = NULL;
+    setup_send_io_step(conn, p, wrote_size, NULL);
+    setup_sendfile_io_step(conn, st.fd, lower, upper + 1, content_length, close_on_keep_alive);
 
-    LL_PUSH(conn->steps, step);
-
-    file_meta = xmalloc(sizeof(struct file_meta));
-    file_meta->infd = st.fd;
-    file_meta->start_offset = lower;
-    file_meta->end_offset = upper + 1;
-    file_meta->size = content_length;
-
-    step = xmalloc(sizeof(struct io_step));
-    step->meta = file_meta;
-    step->handler = write_file;
-    step->cleanup = cleanup_file;
-    step->next = NULL;
-
-    LL_PUSH(conn->steps, step);
+    return C_RUN;
 }
