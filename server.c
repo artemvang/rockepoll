@@ -16,7 +16,8 @@
 
 
 #define MAXFDS 1024
-#define KEEP_ALIVE_TIMEOUT 60
+#define SERVER_FD_COUNT 8
+#define KEEP_ALIVE_TIMEOUT 5
 
 char *argv0;
 
@@ -134,9 +135,9 @@ main(int argc, char *argv[])
     int                  nready, fd;
     time_t               now;
     struct epoll_event   ev, listen_event = {0};
-    struct epoll_event   events[MAXFDS] = {0};
+    struct epoll_event   events[MAXFDS + SERVER_FD_COUNT] = {0};
     struct connection   *tmp_conn, *conn, *connections = NULL;
-    struct connection   *fd2connection[MAXFDS] = {0};
+    struct connection   *fd2connection[MAXFDS + SERVER_FD_COUNT] = {0};
 
     signal(SIGINT, int_handler);
     signal(SIGPIPE, SIG_IGN);
