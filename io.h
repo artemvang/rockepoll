@@ -13,23 +13,23 @@
 #define MAX_REQ_SIZE 4096
 
 
-#define MOVE_NEXT_AND_CLEAN(__head) \
-    do { \
-        struct io_step *__step = __head; \
-        (*(__step)->clean)((__step)->meta); \
-        LL_DELETE(__head, __step); \
-        free(__step); \
-    } while (0)
+#define MOVE_NEXT_AND_CLEAN(__head)                                                            \
+do {                                                                                           \
+    struct io_step *__step = __head;                                                           \
+    (*(__step)->clean)((__step)->meta);                                                        \
+    LL_DELETE(__head, __step);                                                                 \
+    free(__step);                                                                              \
+} while (0)
 
 
-#define FREE_IO_STEPS(__head) \
-    do { \
-        struct io_step *__elt, *__tmp; \
-        LL_FOREACH_SAFE(__head, __elt, __tmp) { \
-            (*(__elt)->clean)((__elt)->meta); \
-            free(__elt); \
-        } \
-    } while (0)
+#define FREE_IO_STEPS(__head)                                                                  \
+do {                                                                                           \
+    struct io_step *__elt, *__tmp;                                                             \
+    LL_FOREACH_SAFE(__head, __elt, __tmp) {                                                    \
+        (*(__elt)->clean)((__elt)->meta);                                                      \
+        free(__elt);                                                                           \
+    }                                                                                          \
+} while (0)
 
 
 enum io_step_status {IO_OK, IO_AGAIN, IO_ERROR};

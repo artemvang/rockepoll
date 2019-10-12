@@ -12,16 +12,16 @@
 #define SENDFILE_CHUNK_SIZE 1024 * 512
 
 
-#define BUILD_IO_STEP(__step_type) \
-    do { \
-        struct io_step *__step = xmalloc(sizeof(struct io_step)); \
-        __step->meta = meta; \
-        __step->step = make_ ## __step_type ## _step; \
-        __step->handle = handler; \
-        __step->clean = clean_ ## __step_type ## _step; \
-        __step->next = NULL; \
-        LL_APPEND(conn->steps, __step); \
-    } while(0)
+#define BUILD_IO_STEP(__step_type)                                                             \
+do {                                                                                           \
+    struct io_step *__step = xmalloc(sizeof(struct io_step));                                  \
+    __step->meta = meta;                                                                       \
+    __step->step = make_ ## __step_type ## _step;                                              \
+    __step->handle = handler;                                                                  \
+    __step->clean = clean_ ## __step_type ## _step;                                            \
+    __step->next = NULL;                                                                       \
+    LL_APPEND(conn->steps, __step);                                                            \
+} while(0)
 
 
 static ALWAYS_INLINE void

@@ -19,13 +19,13 @@
 #define SERVER_FD_COUNT 8
 #define KEEP_ALIVE_TIMEOUT 5
 
-#define CLOSE_CONN(__conn, __peers_count) \
-    do { \
-        close((__conn)->fd); \
-        FREE_IO_STEPS((__conn)->steps); \
-        LL_DELETE(connections, (__conn)); \
-        __peers_count--; \
-    } while (0)
+#define CLOSE_CONN(__conn, __peers_count)                                                      \
+do {                                                                                           \
+    close((__conn)->fd);                                                                       \
+    FREE_IO_STEPS((__conn)->steps);                                                            \
+    LL_DELETE(connections, (__conn));                                                          \
+    __peers_count--;                                                                           \
+} while (0)
 
 
 char *argv0;
