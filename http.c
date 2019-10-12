@@ -1,9 +1,9 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <fcntl.h>
 
 #include "io.h"
 #include "utils.h"
@@ -12,7 +12,7 @@
 
 #define DEFAULT_MIMETYPE "application/octet-stream"
 #define HEADER_ENTRY(__enum, __str) \
-    [__enum] = {.name=__str, .size=sizeof(__str) - 1}
+    [__enum] = { .name=__str, .size=sizeof(__str) - 1 }
 
 
 static const struct {
@@ -103,7 +103,7 @@ get_file_stats(char *target, struct file_stats *st)
 
     st->mime = get_url_mimetype(target);
 
-    if ((st->fd = open(target, O_RDONLY | O_NONBLOCK)) < 0) {
+    if ((st->fd = open(target, O_LARGEFILE | O_RDONLY | O_NONBLOCK)) < 0) {
         return (errno == EACCES) ? S_FORBIDDEN : S_NOT_FOUND;
     }
 
@@ -212,7 +212,6 @@ parse_request(char *raw_content, struct http_request *r)
 
     while (strncmp(p, "\r\n", sizeof("\r\n") - 1)) {
         for (i = 0; i < HEADERS_COUNT; i++) {
-            __builtin_prefetch(&http_headers[i], 0, 0);
             if (!strncmp(p, http_headers[i].name, http_headers[i].size)) {
                 break;
             }
@@ -253,6 +252,18 @@ parse_request(char *raw_content, struct http_request *r)
 }
 
 
+static enum conn_status
+close_on_keep_alive(struct connection *conn)
+{
+    if (conn->keep_alive) {
+        setup_read_io_step(conn, build_response);
+        return C_CLOSE;
+    }
+
+    return C_RUN;
+}
+
+
 static void
 build_http_status_step(enum http_status status, struct connection *conn)
 {
@@ -273,11 +284,11 @@ build_http_status_step(enum http_status status, struct connection *conn)
             http_status_str[status]
     );
 
-    setup_send_io_step(conn, data, wrote_size);
+    setup_send_io_step(conn, data, wrote_size, close_on_keep_alive);
 }
 
 
-void
+enum conn_status
 build_response(struct connection *conn)
 {
     size_t wrote_size;
@@ -294,7 +305,7 @@ build_response(struct connection *conn)
     resp_status = parse_request(req->data, &r);
     if (UNLIKELY(resp_status != S_OK)) {
         build_http_status_step(resp_status, conn);
-        return;
+        return C_RUN;
     }
 
     if (r.headers[H_CONNECTION] && !strcmp(r.headers[H_CONNECTION], "close")) {
@@ -304,12 +315,12 @@ build_response(struct connection *conn)
     resp_status = get_file_stats(r.target, &st);
     if (resp_status != S_OK) {
         build_http_status_step(resp_status, conn);
-        return;
+        return C_RUN;
     }
 
     if (r.headers[H_IF_MATCH] && !strcmp(st.etag, r.headers[H_IF_MATCH])) {
         build_http_status_step(S_NOT_MODIFIED, conn);
-        return;
+        return C_RUN;
     }
 
     lower = 0;
@@ -321,14 +332,14 @@ build_response(struct connection *conn)
 
         if (UNLIKELY(strncmp(p, "bytes=", sizeof("bytes=") - 1))) {
             build_http_status_step(S_BAD_REQUEST, conn);
-            return;
+            return C_RUN;
         }
 
         p += sizeof("bytes=") - 1;
 
         if (UNLIKELY(!(q = strchr(p, '-')))) {
             build_http_status_step(S_BAD_REQUEST, conn);
-            return;
+            return C_RUN;
         }
 
         *(q++) = '\0';
@@ -343,7 +354,7 @@ build_response(struct connection *conn)
 
         if (UNLIKELY(lower < 0 || upper < 0 || lower > upper)) {
             build_http_status_step(S_RANGE_NOT_SATISFIABLE, conn);
-            return;
+            return C_RUN;
         }
 
         upper = MIN(upper, st.size - 1);
@@ -378,6 +389,8 @@ build_response(struct connection *conn)
             (conn->keep_alive) ? "Connection: keep-alive\r\n" : "Connection: close\r\n"
     );
 
-    setup_send_io_step(conn, p, wrote_size);
-    setup_sendfile_io_step(conn, st.fd, lower, upper + 1, content_length);
+    setup_send_io_step(conn, p, wrote_size, NULL);
+    setup_sendfile_io_step(conn, st.fd, lower, upper + 1, content_length, close_on_keep_alive);
+
+    return C_RUN;
 }

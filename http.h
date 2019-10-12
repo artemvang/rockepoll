@@ -45,7 +45,7 @@ struct file_stats {
 };
 
 
-void build_response(struct connection *conn);
+enum conn_status build_response(struct connection *conn);
 
 
 #endif

@@ -10,16 +10,17 @@
 
 #include "arg.h"
 #include "io.h"
+#include "http.h"
 #include "utils.h"
+#include "list.h"
 
 
 #define MAXFDS 1024
 #define KEEP_ALIVE_TIMEOUT 60
 
-
 char *argv0;
 
-static int listenfd, epollfd, accepting = 1;
+static int listenfd, epollfd, peers_count = 0;
 static volatile int loop = 1;
 
 /* parameters from command line */
@@ -59,8 +60,8 @@ create_listen_socket()
 }
 
 
-static int
-accept_peers_loop(int maxfd, struct connection *connections[])
+static void
+accept_peers_loop(struct connection **connections, struct connection *fd2connection[])
 {
     int                  peerfd, opt;
     struct sockaddr_in   connection_addr;
@@ -71,7 +72,7 @@ accept_peers_loop(int maxfd, struct connection *connections[])
 
     last_active = time(NULL);
 
-    while (accepting) {
+    while (peers_count < MAXFDS) {
         peerfd = accept4(listenfd,
                          (struct sockaddr *)&connection_addr,
                          &connection_addr_len, SOCK_NONBLOCK);
@@ -94,9 +95,10 @@ accept_peers_loop(int maxfd, struct connection *connections[])
             conn->keep_alive = keep_alive;
             conn->steps = NULL;
 
-            setup_read_io_step(conn);
-                
-            connections[peerfd] = conn;
+            setup_read_io_step(conn, build_response);
+
+            DL_APPEND_LEFT(*connections, conn);    
+            fd2connection[peerfd] = conn;
 
             peer_event.data.fd = peerfd;
             peer_event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
@@ -106,12 +108,9 @@ accept_peers_loop(int maxfd, struct connection *connections[])
                 continue;
             }
 
-            maxfd = MAX(maxfd, peerfd);
-            accepting = maxfd + 1 < MAXFDS;
+            peers_count++;
         }
     }
-
-    return maxfd;
 }
 
 static inline void
@@ -132,12 +131,12 @@ usage()
 int
 main(int argc, char *argv[])
 {
-    int                  nready, fd, i, maxfd = 0;
+    int                  nready, fd;
     time_t               now;
     struct epoll_event   ev, listen_event = {0};
     struct epoll_event   events[MAXFDS] = {0};
-    struct connection   *conn;
-    struct connection   *connections[MAXFDS] = {0};
+    struct connection   *tmp_conn, *conn, *connections = NULL;
+    struct connection   *fd2connection[MAXFDS] = {0};
 
     signal(SIGINT, int_handler);
     signal(SIGPIPE, SIG_IGN);
@@ -175,24 +174,21 @@ main(int argc, char *argv[])
     while (loop) {
         now = time(NULL);
 
-        for (fd = i = epollfd + 1; fd <= maxfd; fd++) {
-            conn = connections[fd];
-            if (conn) {
-                if (conn->status == C_CLOSE
-                    || difftime(now, conn->last_active) > KEEP_ALIVE_TIMEOUT)
-                {
-                    close(fd);
-                    LL_CLEAN(conn->steps);
-                    free(conn);
-                    connections[fd] = NULL;
-                } else {
-                    i = fd;
-                }
+        conn = connections;
+        while (conn) {
+            if (difftime(now, conn->last_active) > KEEP_ALIVE_TIMEOUT) {
+                close(conn->fd);
+                LL_FREE(conn->steps, CLEAN_STEP);
+
+                tmp_conn = conn->next;
+                DL_DELETE(connections, conn);
+                conn = tmp_conn;
+
+                peers_count--;
+            } else {
+                conn = conn->next;
             }
         }
-
-        maxfd = i;
-        accepting = maxfd + 1 < MAXFDS;
 
         nready = epoll_wait(epollfd, events, MAXFDS, KEEP_ALIVE_TIMEOUT * 1000);
         if (UNLIKELY(nready < 0)) {
@@ -203,21 +199,31 @@ main(int argc, char *argv[])
         while (nready) {
             ev = events[--nready];
             fd = ev.data.fd;
-            conn = connections[fd];
+            conn = fd2connection[fd];
 
             if (fd == listenfd) {
-                maxfd = accept_peers_loop(maxfd, connections);
+                accept_peers_loop(&connections, fd2connection);
             }
             else if (
                 ev.events & EPOLLHUP ||
                 ev.events & EPOLLERR ||
                 ev.events & EPOLLRDHUP)
             {
-                conn->status = C_CLOSE;
+                close(fd);
+                LL_FREE(conn->steps, CLEAN_STEP);
+                DL_DELETE(connections, conn);
+                peers_count--;
             }
             else {
                 process_connection(conn);
-                conn->last_active = now;
+                if (conn->status == C_CLOSE) {
+                    close(fd);
+                    LL_FREE(conn->steps, CLEAN_STEP);
+                    DL_DELETE(connections, conn);
+                    peers_count--;
+                } else {
+                    conn->last_active = now;
+                }
             }
         }
     }

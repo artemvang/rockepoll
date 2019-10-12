@@ -2,10 +2,11 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/sendfile.h>
+#include <fcntl.h>
 
 #include "io.h"
 #include "utils.h"
-#include "http.h"
+#include "list.h"
 
 #define REQ_BUF_SIZE 1024
 #define SENDFILE_CHUNK_SIZE 1024 * 512
@@ -15,22 +16,23 @@
     do { \
         struct io_step *__step = xmalloc(sizeof(struct io_step)); \
         __step->meta = meta; \
-        __step->action = perform_ ## __step_type ## _action; \
-        __step->cleanup = cleanup_ ## __step_type ## _action; \
+        __step->step = make_ ## __step_type ## _step; \
+        __step->handle = handler; \
+        __step->clean = clean_ ## __step_type ## _step; \
         __step->next = NULL; \
-        LL_PUSH(conn->steps, __step); \
+        LL_APPEND(conn->steps, __step); \
     } while(0);
 
 
 static ALWAYS_INLINE void
-cleanup_read_action(void *meta)
+clean_read_step(void *meta)
 {
     free(meta);
 }
 
 
 static ALWAYS_INLINE void
-cleanup_send_action(void *meta)
+clean_send_step(void *meta)
 {
     struct send_meta *h = meta;
     free(h->data);
@@ -38,22 +40,22 @@ cleanup_send_action(void *meta)
 }
 
 static ALWAYS_INLINE void
-cleanup_sendfile_action(void *meta)
+clean_sendfile_step(void *meta)
 {   
     struct sendfile_meta *f = meta;
     close(f->infd);
     free(meta);
 }
 
-
 static enum io_step_status
-perform_sendfile_action(struct connection *conn)
-{   
+make_sendfile_step(struct connection *conn)
+{
     off_t size;
     ssize_t sent_len;
     struct sendfile_meta *meta;
 
     meta = conn->steps->meta;
+
     do {
         size = MIN(SENDFILE_CHUNK_SIZE, meta->size);
         sent_len = sendfile(conn->fd, meta->infd, &(meta->start_offset), size);
@@ -73,7 +75,7 @@ perform_sendfile_action(struct connection *conn)
 
 
 static enum io_step_status
-perform_send_action(struct connection *conn)
+make_send_step(struct connection *conn)
 {
     ssize_t write_size;
     struct send_meta *meta;
@@ -93,7 +95,7 @@ perform_send_action(struct connection *conn)
 
 
 static enum io_step_status
-perform_read_action(struct connection *conn)
+make_read_step(struct connection *conn)
 {
     ssize_t read_size;
     struct read_meta *req;
@@ -116,17 +118,17 @@ perform_read_action(struct connection *conn)
 
     if (UNLIKELY(!req->size || req->size == MAX_REQ_SIZE)) {
         return IO_ERROR;
-    } else {
-        req->data[req->size] = '\0';
-        build_response(conn);
     }
+    req->data[req->size] = '\0';
 
     return IO_OK;
 }
 
 
 inline ALWAYS_INLINE void
-setup_sendfile_io_step(struct connection *conn, int infd, off_t lower, off_t upper, off_t size)
+setup_sendfile_io_step(struct connection *conn,
+                       int infd, off_t lower, off_t upper, off_t size,
+                       enum conn_status (*handler)(struct connection *conn))
 {
     struct sendfile_meta *meta = xmalloc(sizeof(struct sendfile_meta));
     meta->infd = infd;
@@ -139,7 +141,10 @@ setup_sendfile_io_step(struct connection *conn, int infd, off_t lower, off_t upp
 
 
 inline ALWAYS_INLINE void
-setup_send_io_step(struct connection *conn, char* data, size_t size) {
+setup_send_io_step(struct connection *conn,
+                   char* data, size_t size,
+                   enum conn_status (*handler)(struct connection *conn))
+{
     struct send_meta *meta = xmalloc(sizeof(struct send_meta));
     meta->data = data;
     meta->size = size;
@@ -149,7 +154,8 @@ setup_send_io_step(struct connection *conn, char* data, size_t size) {
 
 
 inline ALWAYS_INLINE void
-setup_read_io_step(struct connection *conn)
+setup_read_io_step(struct connection *conn,
+                   enum conn_status (*handler)(struct connection *conn))
 {
     struct read_meta *meta = xmalloc(sizeof(struct read_meta));
     meta->size = 0;
@@ -165,16 +171,14 @@ process_connection(struct connection *conn)
     enum io_step_status s;
 
     while (run && conn->steps) {
-        s = (*conn->steps->action)(conn);
+        s = (*conn->steps->step)(conn);
 
         switch(s) {
         case IO_OK:
-            LL_MOVE_NEXT(conn->steps);
-            if (!conn->steps && conn->keep_alive) {
-                setup_read_io_step(conn);
+            if (*conn->steps->handle && (*conn->steps->handle)(conn) == C_CLOSE) {
                 run = 0;
             }
-
+            LL_MOVE_NEXT(conn->steps, CLEAN_STEP);
             if (!conn->steps) {
                 conn->status = C_CLOSE;
                 run = 0;
