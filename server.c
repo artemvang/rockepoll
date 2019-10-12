@@ -12,12 +12,21 @@
 #include "io.h"
 #include "http.h"
 #include "utils.h"
-#include "list.h"
+#include "utlist.h"
 
 
 #define MAXFDS 1024
 #define SERVER_FD_COUNT 8
 #define KEEP_ALIVE_TIMEOUT 5
+
+#define CLOSE_CONN(__conn, __peers_count) \
+    do { \
+        close((__conn)->fd); \
+        FREE_IO_STEPS((__conn)->steps); \
+        LL_DELETE(connections, (__conn)); \
+        __peers_count--; \
+    } while (0)
+
 
 char *argv0;
 
@@ -95,10 +104,9 @@ accept_peers_loop(struct connection **connections, struct connection *fd2connect
             conn->status = C_RUN;
             conn->keep_alive = keep_alive;
             conn->steps = NULL;
-
             setup_read_io_step(conn, build_response);
 
-            DL_APPEND_LEFT(*connections, conn);    
+            DL_PREPEND(*connections, conn);    
             fd2connection[peerfd] = conn;
 
             peer_event.data.fd = peerfd;
@@ -175,19 +183,9 @@ main(int argc, char *argv[])
     while (loop) {
         now = time(NULL);
 
-        conn = connections;
-        while (conn) {
+        DL_FOREACH_SAFE(connections, conn, tmp_conn) {
             if (difftime(now, conn->last_active) > KEEP_ALIVE_TIMEOUT) {
-                close(conn->fd);
-                LL_FREE(conn->steps, CLEAN_STEP);
-
-                tmp_conn = conn->next;
-                DL_DELETE(connections, conn);
-                conn = tmp_conn;
-
-                peers_count--;
-            } else {
-                conn = conn->next;
+                CLOSE_CONN(conn, peers_count);
             }
         }
 
@@ -210,18 +208,12 @@ main(int argc, char *argv[])
                 ev.events & EPOLLERR ||
                 ev.events & EPOLLRDHUP)
             {
-                close(fd);
-                LL_FREE(conn->steps, CLEAN_STEP);
-                DL_DELETE(connections, conn);
-                peers_count--;
+                CLOSE_CONN(conn, peers_count);
             }
             else {
                 process_connection(conn);
                 if (conn->status == C_CLOSE) {
-                    close(fd);
-                    LL_FREE(conn->steps, CLEAN_STEP);
-                    DL_DELETE(connections, conn);
-                    peers_count--;
+                    CLOSE_CONN(conn, peers_count);
                 } else {
                     conn->last_active = now;
                 }
