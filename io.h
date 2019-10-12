@@ -8,10 +8,10 @@
 #include <stdio.h>
 
 #include "utlist.h"
+#include "utstring.h"
 
 
 #define MAX_REQ_SIZE 4096
-
 
 #define MOVE_NEXT_AND_CLEAN(__head)                                                            \
 do {                                                                                           \
@@ -20,7 +20,6 @@ do {                                                                            
     LL_DELETE(__head, __step);                                                                 \
     free(__step);                                                                              \
 } while (0)
-
 
 #define FREE_IO_STEPS(__head)                                                                  \
 do {                                                                                           \
@@ -37,8 +36,7 @@ enum conn_status {C_RUN, C_CLOSE};
 
 
 struct send_meta {
-    size_t size;
-    char *data;
+    UT_string *data;
 };
 
 
@@ -79,8 +77,8 @@ void process_connection(struct connection *conn);
 void setup_read_io_step(struct connection *conn,
                         enum conn_status (*process_result)(struct connection *conn));
 
-void setup_send_io_step(struct connection
-                        *conn, char *data, size_t size,
+void setup_send_io_step(struct connection *conn,
+                        UT_string *str,
                         enum conn_status (*process_result)(struct connection *conn));
 
 void setup_sendfile_io_step(struct connection *conn,
