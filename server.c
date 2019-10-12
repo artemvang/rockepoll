@@ -8,7 +8,6 @@
 #include <unistd.h>
 #include <err.h>
 
-#include "arg.h"
 #include "io.h"
 #include "http.h"
 #include "utils.h"
@@ -122,14 +121,14 @@ accept_peers_loop(struct connection **connections, struct connection *fd2connect
     }
 }
 
-static inline void
+static ALWAYS_INLINE void
 int_handler(int dummy unused)
 {
     loop = 0;
 }
 
 
-static inline void
+static ALWAYS_INLINE void
 usage()
 {
     printf("usage: %s [-l listen] [-p port] [-k] [-h]\n", argv0);
