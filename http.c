@@ -8,9 +8,13 @@
 #include "io.h"
 #include "utils.h"
 #include "http.h"
+#include "utstring.h"
 
 
 #define DEFAULT_MIMETYPE "application/octet-stream"
+#define HTTP_STATUS_TEMPLATE "<h1>%s</h1>"
+#define HTTP_STATUS_TEMPLATE_SIZE (sizeof(HTTP_STATUS_TEMPLATE) - 2 - 1)
+
 #define HEADER_ENTRY(__enum, __str) \
     [__enum] = { .name=__str, .size=sizeof(__str) - 1 }
 
@@ -267,34 +271,37 @@ close_on_keep_alive(struct connection *conn)
 static void
 build_http_status_step(enum http_status status, struct connection *conn)
 {
-    char *data;
-    size_t wrote_size;
+    UT_string *str;
+    utstring_new(str);
+    utstring_reserve(str, 256);
 
-    wrote_size = asprintf(&data,
-            "HTTP/1.1 %d %s\r\n"
-            "Content-Type: text/html; charset=utf-8\r\n"
-            "Accept-Ranges: bytes\r\n"
-            "Content-Length: %d\r\n"
-            "%s"
-            "\r\n"
-            "<h1>%s</h1>",
-            status, http_status_str[status],
-            (int)strlen(http_status_str[status]) + 9,
-            (conn->keep_alive) ? "Connection: keep-alive\r\n" : "Connection: close\r\n",
-            http_status_str[status]
-    );
+    utstring_printf(str,
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: text/html; charset=utf-8\r\n"
+        "Accept-Ranges: bytes\r\n"
+        "Content-Length: %lu\r\n",
+        status, http_status_str[status],
+        strlen(http_status_str[status]) + HTTP_STATUS_TEMPLATE_SIZE);
 
-    setup_send_io_step(conn, data, wrote_size, close_on_keep_alive);
+    if (conn->keep_alive) {
+        utstring_printf(str, "Connection: keep-alive\r\n");
+    } else {
+        utstring_printf(str, "Connection: close\r\n");
+    }
+
+    utstring_printf(str, "\r\n");
+    utstring_printf(str, HTTP_STATUS_TEMPLATE, http_status_str[status]);
+
+    setup_send_io_step(conn, str, close_on_keep_alive);
 }
 
 
 enum conn_status
 build_response(struct connection *conn)
 {
-    size_t wrote_size;
+    UT_string *str;
     off_t lower, upper, content_length;
     char *p, *q;
-    char content_range[128] = {0};
     struct file_stats st = {0};
     enum http_status resp_status;
     struct http_request r = {0};
@@ -363,33 +370,37 @@ build_response(struct connection *conn)
         resp_status = S_PARTIAL_CONTENT;
     }
 
+    utstring_new(str);
+    utstring_reserve(str, 256);
+
+    utstring_printf(str,
+        "HTTP/1.1 %d %s\r\n"
+        "Accept-Ranges: bytes\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %lld\r\n"
+        "ETag: \"%s\"\r\n",
+        resp_status, http_status_str[resp_status],
+        st.mime,
+        (long long)content_length,
+        st.etag);
+
     if (resp_status == S_PARTIAL_CONTENT) {
-        sprintf(content_range,
-                "Content-Range: bytes %lld-%lld/%lld\r\n",
-                (long long)lower,
-                (long long)upper,
-                (long long)st.size
-        );
+        utstring_printf(str,
+            "Content-Range: bytes %lld-%lld/%lld\r\n",
+            (long long)lower,
+            (long long)upper,
+            (long long)st.size);
     }
 
-    wrote_size = asprintf(&p,
-            "HTTP/1.1 %d %s\r\n"
-            "Accept-Ranges: bytes\r\n"
-            "Content-Type: %s\r\n"
-            "Content-Length: %lld\r\n"
-            "ETag: \"%s\"\r\n"
-            "%s"
-            "%s"
-            "\r\n",
-            resp_status, http_status_str[resp_status],
-            st.mime,
-            (long long)content_length,
-            st.etag,
-            content_range,
-            (conn->keep_alive) ? "Connection: keep-alive\r\n" : "Connection: close\r\n"
-    );
+    if (conn->keep_alive) {
+        utstring_printf(str, "Connection: keep-alive\r\n");
+    } else {
+        utstring_printf(str, "Connection: close\r\n");
+    }
 
-    setup_send_io_step(conn, p, wrote_size, NULL);
+    utstring_printf(str, "\r\n");
+
+    setup_send_io_step(conn, str, NULL);
     setup_sendfile_io_step(conn, st.fd, lower, upper + 1, content_length, close_on_keep_alive);
 
     return C_RUN;

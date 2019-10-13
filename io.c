@@ -6,22 +6,23 @@
 
 #include "io.h"
 #include "utils.h"
-#include "list.h"
+#include "utlist.h"
+#include "utstring.h"
 
 #define REQ_BUF_SIZE 1024
 #define SENDFILE_CHUNK_SIZE 1024 * 512
 
 
-#define BUILD_IO_STEP(__step_type) \
-    do { \
-        struct io_step *__step = xmalloc(sizeof(struct io_step)); \
-        __step->meta = meta; \
-        __step->step = make_ ## __step_type ## _step; \
-        __step->handle = handler; \
-        __step->clean = clean_ ## __step_type ## _step; \
-        __step->next = NULL; \
-        LL_APPEND(conn->steps, __step); \
-    } while(0);
+#define BUILD_IO_STEP(__step_type)                                                             \
+do {                                                                                           \
+    struct io_step *__step = xmalloc(sizeof(struct io_step));                                  \
+    __step->meta = meta;                                                                       \
+    __step->step = make_ ## __step_type ## _step;                                              \
+    __step->handle = handler;                                                                  \
+    __step->clean = clean_ ## __step_type ## _step;                                            \
+    __step->next = NULL;                                                                       \
+    LL_APPEND(conn->steps, __step);                                                            \
+} while(0)
 
 
 static ALWAYS_INLINE void
@@ -35,7 +36,7 @@ static ALWAYS_INLINE void
 clean_send_step(void *meta)
 {
     struct send_meta *h = meta;
-    free(h->data);
+    utstring_free(h->data);
     free(meta);
 }
 
@@ -81,7 +82,7 @@ make_send_step(struct connection *conn)
     struct send_meta *meta;
 
     meta = conn->steps->meta;
-    write_size = send(conn->fd, meta->data, meta->size, 0);
+    write_size = send(conn->fd, utstring_body(meta->data), utstring_len(meta->data), 0);
     if (write_size < 0) {
         if (LIKELY(errno == EAGAIN)) {
             return IO_AGAIN;
@@ -142,12 +143,11 @@ setup_sendfile_io_step(struct connection *conn,
 
 inline ALWAYS_INLINE void
 setup_send_io_step(struct connection *conn,
-                   char* data, size_t size,
+                   UT_string *str,
                    enum conn_status (*handler)(struct connection *conn))
 {
     struct send_meta *meta = xmalloc(sizeof(struct send_meta));
-    meta->data = data;
-    meta->size = size;
+    meta->data = str;
 
     BUILD_IO_STEP(send);
 }
@@ -169,17 +169,19 @@ process_connection(struct connection *conn)
 {
     int run = 1;
     enum io_step_status s;
+    struct io_step *steps_head;
 
     while (run && conn->steps) {
-        s = (*conn->steps->step)(conn);
+        steps_head = conn->steps;
+        s = (*steps_head->step)(conn);
 
         switch(s) {
         case IO_OK:
-            if (*conn->steps->handle && (*conn->steps->handle)(conn) == C_CLOSE) {
+            if (*steps_head->handle && (*steps_head->handle)(conn) == C_CLOSE) {
                 run = 0;
             }
-            LL_MOVE_NEXT(conn->steps, CLEAN_STEP);
-            if (!conn->steps) {
+            MOVE_NEXT_AND_CLEAN(steps_head);
+            if (!steps_head) {
                 conn->status = C_CLOSE;
                 run = 0;
             }
@@ -192,5 +194,7 @@ process_connection(struct connection *conn)
             run = 0;
             break;
         }
+
+        conn->steps = steps_head;
     }
 }
