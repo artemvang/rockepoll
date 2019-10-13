@@ -64,7 +64,6 @@ static const char *http_status_str[] = {
     [S_NOT_MODIFIED]           = "Not Modified",
 };
 
-
 static const struct {
     char *name;
     size_t size;
@@ -260,7 +259,7 @@ static enum conn_status
 close_on_keep_alive(struct connection *conn)
 {
     if (conn->keep_alive) {
-        setup_read_io_step(conn, build_response);
+        setup_read_io_step(conn, IO_FLAG_NONE, build_response);
         return C_CLOSE;
     }
 
@@ -292,7 +291,10 @@ build_http_status_step(enum http_status status, struct connection *conn)
     utstring_printf(str, "\r\n");
     utstring_printf(str, HTTP_STATUS_TEMPLATE, http_status_str[status]);
 
-    setup_send_io_step(conn, str, close_on_keep_alive);
+    setup_send_io_step(conn,
+                       IO_FLAG_NONE,
+                       str,
+                       close_on_keep_alive);
 }
 
 
@@ -400,8 +402,14 @@ build_response(struct connection *conn)
 
     utstring_printf(str, "\r\n");
 
-    setup_send_io_step(conn, str, NULL);
-    setup_sendfile_io_step(conn, st.fd, lower, upper + 1, content_length, close_on_keep_alive);
+    setup_send_io_step(conn,
+                       IO_FLAG_SEND_CORK,
+                       str,
+                       NULL);
+    setup_sendfile_io_step(conn,
+                           IO_FLAG_NONE,
+                           st.fd, lower, upper + 1, content_length,
+                           close_on_keep_alive);
 
     return C_RUN;
 }

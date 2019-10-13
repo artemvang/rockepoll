@@ -103,7 +103,7 @@ accept_peers_loop(struct connection **connections, struct connection *fd2connect
             conn->status = C_RUN;
             conn->keep_alive = keep_alive;
             conn->steps = NULL;
-            setup_read_io_step(conn, build_response);
+            setup_read_io_step(conn, IO_FLAG_NONE, build_response);
 
             DL_PREPEND(*connections, conn);    
             fd2connection[peerfd] = conn;
@@ -120,6 +120,7 @@ accept_peers_loop(struct connection **connections, struct connection *fd2connect
         }
     }
 }
+
 
 static ALWAYS_INLINE void
 int_handler(int dummy unused)

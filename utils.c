@@ -14,6 +14,7 @@ xmalloc(const size_t size)
     return ptr;
 }
 
+
 void *
 xrealloc(void *original, const size_t size)
 {

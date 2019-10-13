@@ -16,6 +16,7 @@
 #define BUILD_IO_STEP(__step_type)                                                             \
 do {                                                                                           \
     struct io_step *__step = xmalloc(sizeof(struct io_step));                                  \
+    __step->io_flags = io_flags;                                                               \
     __step->meta = meta;                                                                       \
     __step->step = make_ ## __step_type ## _step;                                              \
     __step->handle = handler;                                                                  \
@@ -40,6 +41,7 @@ clean_send_step(void *meta)
     free(meta);
 }
 
+
 static ALWAYS_INLINE void
 clean_sendfile_step(void *meta)
 {   
@@ -47,6 +49,7 @@ clean_sendfile_step(void *meta)
     close(f->infd);
     free(meta);
 }
+
 
 static enum io_step_status
 make_sendfile_step(struct connection *conn)
@@ -61,7 +64,7 @@ make_sendfile_step(struct connection *conn)
         size = MIN(SENDFILE_CHUNK_SIZE, meta->size);
         sent_len = sendfile(conn->fd, meta->infd, &(meta->start_offset), size);
         if (sent_len < 0) {
-            if (LIKELY(errno == EAGAIN)) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return IO_AGAIN;
             }
 
@@ -78,13 +81,16 @@ make_sendfile_step(struct connection *conn)
 static enum io_step_status
 make_send_step(struct connection *conn)
 {
+    int flags;
     ssize_t write_size;
     struct send_meta *meta;
 
+    flags = conn->steps->io_flags;
     meta = conn->steps->meta;
-    write_size = send(conn->fd, utstring_body(meta->data), utstring_len(meta->data), 0);
+
+    write_size = send(conn->fd, utstring_body(meta->data), utstring_len(meta->data), flags);
     if (write_size < 0) {
-        if (LIKELY(errno == EAGAIN)) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return IO_AGAIN;
         }
 
@@ -106,7 +112,7 @@ make_read_step(struct connection *conn)
         read_size = read(conn->fd, req->data + req->size, MIN(REQ_BUF_SIZE, MAX_REQ_SIZE - req->size));
 
         if (read_size < 1) {
-            if (LIKELY(read_size < 0 && errno == EAGAIN)) {
+            if (read_size < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
                 return IO_AGAIN;
             }
 
@@ -126,8 +132,9 @@ make_read_step(struct connection *conn)
 }
 
 
-inline ALWAYS_INLINE void
+ALWAYS_INLINE void
 setup_sendfile_io_step(struct connection *conn,
+                       int io_flags,
                        int infd, off_t lower, off_t upper, off_t size,
                        enum conn_status (*handler)(struct connection *conn))
 {
@@ -141,8 +148,9 @@ setup_sendfile_io_step(struct connection *conn,
 }
 
 
-inline ALWAYS_INLINE void
+ALWAYS_INLINE void
 setup_send_io_step(struct connection *conn,
+                   int io_flags,
                    UT_string *str,
                    enum conn_status (*handler)(struct connection *conn))
 {
@@ -153,8 +161,9 @@ setup_send_io_step(struct connection *conn,
 }
 
 
-inline ALWAYS_INLINE void
+ALWAYS_INLINE void
 setup_read_io_step(struct connection *conn,
+                   int io_flags, 
                    enum conn_status (*handler)(struct connection *conn))
 {
     struct read_meta *meta = xmalloc(sizeof(struct read_meta));
