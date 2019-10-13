@@ -374,15 +374,15 @@ build_response(struct connection *conn)
     utstring_reserve(str, 256);
 
     utstring_printf(str,
-            "HTTP/1.1 %d %s\r\n"
-            "Accept-Ranges: bytes\r\n"
-            "Content-Type: %s\r\n"
-            "Content-Length: %lld\r\n"
-            "ETag: \"%s\"\r\n",
-            resp_status, http_status_str[resp_status],
-            st.mime,
-            (long long)content_length,
-            st.etag);
+        "HTTP/1.1 %d %s\r\n"
+        "Accept-Ranges: bytes\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %lld\r\n"
+        "ETag: \"%s\"\r\n",
+        resp_status, http_status_str[resp_status],
+        st.mime,
+        (long long)content_length,
+        st.etag);
 
     if (resp_status == S_PARTIAL_CONTENT) {
         utstring_printf(str,
