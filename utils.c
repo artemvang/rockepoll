@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <err.h>
 
 #include "utils.h"
@@ -47,6 +48,8 @@ prepare_logfile(const char *logfile)
         if (logfd < 0) {
             errx(1, "open(), file %s", logfile);
         }
+
+        chmod(logfile, S_IRUSR|S_IWUSR|S_IRGRP);
     } else {
         logfd = -1;
     }
