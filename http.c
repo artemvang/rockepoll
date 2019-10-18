@@ -11,12 +11,26 @@
 #include "utstring.h"
 
 
+extern int logfd;
+
+
 #define DEFAULT_MIMETYPE "application/octet-stream"
 #define HTTP_STATUS_TEMPLATE "<h1>%s</h1>"
 #define HTTP_STATUS_TEMPLATE_SIZE (sizeof(HTTP_STATUS_TEMPLATE) - 2 - 1)
 
-#define HEADER_ENTRY(__enum, __str) \
+#define HEADER_ENTRY(__enum, __str)                                                            \
     [__enum] = { .name=__str, .size=sizeof(__str) - 1 }
+
+#define LOG_NEW_CONN(__conn, __request, __status, __content_length)                            \
+    if (logfd > 0) {                                                                           \
+        char *__user_agent = (__request)->headers[H_USER_AGENT];                               \
+        dprintf(logfd,                                                                         \
+                "%s %ld \"%s\" %d %lld \"%s\"\n",                                              \
+                (__conn)->ip, (__conn)->last_active,                                           \
+                (__status != S_BAD_REQUEST) ? (__request)->first_row : "-",                    \
+                __status, (long long)__content_length,                                         \
+                (__user_agent) ? __user_agent : "-");                                          \
+    }
 
 
 static const struct {
@@ -71,6 +85,7 @@ static const struct {
     HEADER_ENTRY(H_RANGE,      "Range"),
     HEADER_ENTRY(H_CONNECTION, "Connection"),
     HEADER_ENTRY(H_IF_MATCH,   "If-Match"),
+    HEADER_ENTRY(H_USER_AGENT, "User-Agent"),
 };
 
 
@@ -172,6 +187,8 @@ parse_request(char *raw_content, struct http_request *r)
     int i;
     char *q, *p = raw_content;
 
+    r->first_row = p;
+
     if (strncmp(p, "GET", sizeof("GET") - 1)) {
         return S_METHOD_NOT_ALLOWED;
     }
@@ -211,6 +228,7 @@ parse_request(char *raw_content, struct http_request *r)
         return S_BAD_REQUEST;
     }
 
+    p[1] = '\0';
     p += sizeof("\r\n") - 1;
 
     while (strncmp(p, "\r\n", sizeof("\r\n") - 1)) {
@@ -260,19 +278,22 @@ close_on_keep_alive(struct connection *conn)
 {
     if (conn->keep_alive) {
         setup_read_io_step(conn, IO_FLAG_NONE, build_response);
-        return C_CLOSE;
+        return C_RUN;
     }
 
-    return C_RUN;
+    return C_CLOSE;
 }
 
 
 static void
-build_http_status_step(enum http_status status, struct connection *conn)
+build_http_status_step(enum http_status status, struct connection *conn, struct http_request *r)
 {
+    size_t content_length;
     UT_string *str;
+
     utstring_new(str);
     utstring_reserve(str, 256);
+    content_length = strlen(http_status_str[status]) + HTTP_STATUS_TEMPLATE_SIZE;
 
     utstring_printf(str,
         "HTTP/1.1 %d %s\r\n"
@@ -280,7 +301,7 @@ build_http_status_step(enum http_status status, struct connection *conn)
         "Accept-Ranges: bytes\r\n"
         "Content-Length: %lu\r\n",
         status, http_status_str[status],
-        strlen(http_status_str[status]) + HTTP_STATUS_TEMPLATE_SIZE);
+        content_length);
 
     if (conn->keep_alive) {
         utstring_printf(str, "Connection: keep-alive\r\n");
@@ -295,6 +316,8 @@ build_http_status_step(enum http_status status, struct connection *conn)
                        IO_FLAG_NONE,
                        str,
                        close_on_keep_alive);
+
+    LOG_NEW_CONN(conn, r, status, content_length);
 }
 
 
@@ -313,7 +336,7 @@ build_response(struct connection *conn)
 
     resp_status = parse_request(req->data, &r);
     if (UNLIKELY(resp_status != S_OK)) {
-        build_http_status_step(resp_status, conn);
+        build_http_status_step(resp_status, conn, &r);
         return C_RUN;
     }
 
@@ -323,12 +346,12 @@ build_response(struct connection *conn)
 
     resp_status = get_file_stats(r.target, &st);
     if (resp_status != S_OK) {
-        build_http_status_step(resp_status, conn);
+        build_http_status_step(resp_status, conn, &r);
         return C_RUN;
     }
 
     if (r.headers[H_IF_MATCH] && !strcmp(st.etag, r.headers[H_IF_MATCH])) {
-        build_http_status_step(S_NOT_MODIFIED, conn);
+        build_http_status_step(S_NOT_MODIFIED, conn, &r);
         return C_RUN;
     }
 
@@ -340,14 +363,14 @@ build_response(struct connection *conn)
         p = r.headers[H_RANGE];
 
         if (UNLIKELY(strncmp(p, "bytes=", sizeof("bytes=") - 1))) {
-            build_http_status_step(S_BAD_REQUEST, conn);
+            build_http_status_step(S_BAD_REQUEST, conn, &r);
             return C_RUN;
         }
 
         p += sizeof("bytes=") - 1;
 
         if (UNLIKELY(!(q = strchr(p, '-')))) {
-            build_http_status_step(S_BAD_REQUEST, conn);
+            build_http_status_step(S_BAD_REQUEST, conn, &r);
             return C_RUN;
         }
 
@@ -362,7 +385,7 @@ build_response(struct connection *conn)
         }
 
         if (UNLIKELY(lower < 0 || upper < 0 || lower > upper)) {
-            build_http_status_step(S_RANGE_NOT_SATISFIABLE, conn);
+            build_http_status_step(S_RANGE_NOT_SATISFIABLE, conn, &r);
             return C_RUN;
         }
 
@@ -410,6 +433,8 @@ build_response(struct connection *conn)
                            IO_FLAG_NONE,
                            st.fd, lower, upper + 1, content_length,
                            close_on_keep_alive);
+
+    LOG_NEW_CONN(conn, &r, resp_status, content_length);
 
     return C_RUN;
 }

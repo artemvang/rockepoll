@@ -27,11 +27,13 @@ enum http_header {
     H_RANGE,
     H_IF_MATCH,
     H_CONNECTION,
+    H_USER_AGENT,
     HEADERS_COUNT,
 };
 
 
 struct http_request {
+    char *first_row;
     char *target;
     char *headers[HEADERS_COUNT];
 };

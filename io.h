@@ -68,8 +68,10 @@ struct io_step {
 
 
 struct connection {
-    int fd, status, keep_alive;
+    int fd, keep_alive;
+    enum conn_status status;
     time_t last_active;
+    char ip[16];
     struct io_step *steps;
     struct connection *next;
     struct connection *prev;

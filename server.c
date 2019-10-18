@@ -6,6 +6,7 @@
 #include <sys/epoll.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <err.h>
 
 #include "io.h"
@@ -27,15 +28,11 @@ do {                                                                            
 } while (0)
 
 
-char *argv0;
+extern int   port, logfd, keep_alive;
+extern char *listen_addr;
 
 static int listenfd, epollfd, peers_count = 0;
 static volatile int loop = 1;
-
-/* parameters from command line */
-static int port = 7887; 
-static int keep_alive = 1; 
-static char *listen_addr = "127.0.0.1"; 
 
 
 static void
@@ -98,6 +95,9 @@ accept_peers_loop(struct connection **connections, struct connection *fd2connect
             }
 
             conn = xmalloc(sizeof(struct connection));
+
+            memset(conn->ip, 0, sizeof(conn->ip));
+            strcpy(conn->ip, inet_ntoa(connection_addr.sin_addr));
             conn->fd = peerfd;
             conn->last_active = last_active;
             conn->status = C_RUN;
@@ -122,18 +122,10 @@ accept_peers_loop(struct connection **connections, struct connection *fd2connect
 }
 
 
-static ALWAYS_INLINE void
-int_handler(int dummy unused)
+static void
+int_handler(int dummy UNUSED)
 {
     loop = 0;
-}
-
-
-static ALWAYS_INLINE void
-usage()
-{
-    printf("usage: %s [-l listen] [-p port] [-k] [-h]\n", argv0);
-    exit(0);
 }
 
 
@@ -150,23 +142,7 @@ main(int argc, char *argv[])
     signal(SIGINT, int_handler);
     signal(SIGPIPE, SIG_IGN);
 
-    ARGBEGIN {
-    case 'p':
-        port = atoi(EARGF(usage()));
-        break;
-    case 'l':
-        listen_addr = EARGF(usage());
-        break;
-    case 'k':
-        keep_alive = 1;
-        break;
-    case 'h':
-        usage();
-        break;
-    default:
-        break;
-    } ARGEND;
-
+    parse_args(argc, argv);
     create_listen_socket();
 
     epollfd = epoll_create1(0);
@@ -219,6 +195,10 @@ main(int argc, char *argv[])
                 }
             }
         }
+    }
+
+    if (logfd != 1) {
+        close(logfd);
     }
 
     close(epollfd);
