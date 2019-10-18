@@ -49,7 +49,7 @@ prepare_logfile(const char *logfile)
             errx(1, "open(), file %s", logfile);
         }
 
-        chmod(logfile, S_IRUSR|S_IWUSR|S_IRGRP);
+        chmod(logfile, S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
     } else {
         logfd = -1;
     }
