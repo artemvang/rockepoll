@@ -179,10 +179,12 @@ build_http_status_step(enum http_status status, struct connection *conn, struct 
 
     content_length = strlen(http_status_str[status]) + HTTP_STATUS_TEMPLATE_SIZE;
     data = xmalloc(256);
+    size = 0;
 
-    size = sprintf(data, "HTTP/1.1 %d %s\r\n", status, http_status_str[status]);
-    size = sprintf(data + size, "Accept-Ranges: bytes\r\n");
-    size = sprintf(data + size, "Content-Length: %lu\r\n", content_length);
+    size += sprintf(data + size, "HTTP/1.1 %d %s\r\n", status, http_status_str[status]);
+    size += sprintf(data + size, "Server: rockepoll\r\n");
+    size += sprintf(data + size, "Accept-Ranges: bytes\r\n");
+    size += sprintf(data + size, "Content-Length: %lu\r\n", content_length);
     if (conn->keep_alive) {
         size += sprintf(data + size, "Connection: keep-alive\r\n\r\n");
     } else {
@@ -292,11 +294,12 @@ build_response(struct connection *conn)
     p = xmalloc(256);
     size = 0;
 
-    size = sprintf(p + size, "HTTP/1.1 %d %s\r\n", status, http_status_str[status]);
-    size = sprintf(p + size, "Accept-Ranges: bytes\r\n");
-    size = sprintf(p + size, "Content-Type: %s\r\n", st.mime);
-    size = sprintf(p + size, "Content-Length: %lu\r\n", content_length);
-    size = sprintf(p + size, "ETag: \"%s\"\r\n", st.etag);
+    size += sprintf(p + size, "HTTP/1.1 %d %s\r\n", status, http_status_str[status]);
+    size += sprintf(p + size, "Server: rockepoll\r\n");
+    size += sprintf(p + size, "Accept-Ranges: bytes\r\n");
+    size += sprintf(p + size, "Content-Type: %s\r\n", st.mime);
+    size += sprintf(p + size, "Content-Length: %lu\r\n", content_length);
+    size += sprintf(p + size, "ETag: \"%s\"\r\n", st.etag);
 
     if (status == S_PARTIAL_CONTENT) {
         size += sprintf(p + size,
