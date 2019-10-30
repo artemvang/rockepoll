@@ -5,11 +5,9 @@
 #include <sys/types.h>
 #include <time.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <netinet/tcp.h>
 
 #include "utlist.h"
-#include "utstring.h"
 
 
 #define MAX_REQ_SIZE 4096
@@ -39,7 +37,8 @@ enum conn_status {C_RUN, C_CLOSE};
 
 
 struct send_meta {
-    UT_string *data;
+    char *data;
+    size_t size;
 };
 
 
@@ -61,7 +60,7 @@ struct io_step {
     int io_flags;
     void *meta;
     enum io_step_status (*step)(struct connection *conn);
-    enum conn_status (*handle)(struct connection *conn);
+    enum conn_status (*handler)(struct connection *conn);
     void (*clean)(void *meta);
     struct io_step *next;
 };
@@ -86,7 +85,7 @@ void setup_read_io_step(struct connection *conn,
 
 void setup_send_io_step(struct connection *conn,
                         int io_flags,
-                        UT_string *str,
+                        char *data, size_t size,
                         enum conn_status (*process_result)(struct connection *conn));
 
 void setup_sendfile_io_step(struct connection *conn,
