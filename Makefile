@@ -1,7 +1,7 @@
 include config.mk
 
 
-SRC = server.c utils.c io.c http.c
+SRC = server.c utils.c io.c log.c http/parser.c http/handler.c
 OBJ = ${SRC:.c=.o}
 
 
@@ -17,7 +17,7 @@ options:
 
 
 .c.o:
-	${CC} -c ${CFLAGS} $<
+	${CC} -o $@ -c ${CFLAGS} $<
 
 
 ${OBJ}: config.mk

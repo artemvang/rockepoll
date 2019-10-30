@@ -7,7 +7,6 @@
 #include "io.h"
 #include "utils.h"
 #include "utlist.h"
-#include "utstring.h"
 
 #define REQ_BUF_SIZE 1024
 #define SENDFILE_CHUNK_SIZE 1024 * 512
@@ -19,7 +18,7 @@ do {                                                                            
     __step->io_flags = io_flags;                                                               \
     __step->meta = meta;                                                                       \
     __step->step = make_ ## __step_type ## _step;                                              \
-    __step->handle = handler;                                                                  \
+    __step->handler = handler;                                                                 \
     __step->clean = clean_ ## __step_type ## _step;                                            \
     __step->next = NULL;                                                                       \
     LL_APPEND(conn->steps, __step);                                                            \
@@ -37,7 +36,7 @@ static ALWAYS_INLINE void
 clean_send_step(void *meta)
 {
     struct send_meta *h = meta;
-    utstring_free(h->data);
+    free(h->data);
     free(meta);
 }
 
@@ -64,7 +63,7 @@ make_sendfile_step(struct connection *conn)
         size = MIN(SENDFILE_CHUNK_SIZE, meta->size);
         sent_len = sendfile(conn->fd, meta->infd, &(meta->start_offset), size);
         if (sent_len < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (LIKELY(errno == EAGAIN || errno == EWOULDBLOCK)) {
                 return IO_AGAIN;
             }
 
@@ -88,9 +87,9 @@ make_send_step(struct connection *conn)
     flags = conn->steps->io_flags;
     meta = conn->steps->meta;
 
-    write_size = send(conn->fd, utstring_body(meta->data), utstring_len(meta->data), flags);
+    write_size = send(conn->fd, meta->data, meta->size, flags);
     if (write_size < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        if (LIKELY(errno == EAGAIN || errno == EWOULDBLOCK)) {
             return IO_AGAIN;
         }
 
@@ -112,7 +111,7 @@ make_read_step(struct connection *conn)
         read_size = read(conn->fd, req->data + req->size, MIN(REQ_BUF_SIZE, MAX_REQ_SIZE - req->size));
 
         if (read_size < 1) {
-            if (read_size < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (LIKELY(read_size < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
                 return IO_AGAIN;
             }
 
@@ -151,11 +150,12 @@ setup_sendfile_io_step(struct connection *conn,
 ALWAYS_INLINE void
 setup_send_io_step(struct connection *conn,
                    int io_flags,
-                   UT_string *str,
+                   char *data, size_t size,
                    enum conn_status (*handler)(struct connection *conn))
 {
     struct send_meta *meta = xmalloc(sizeof(struct send_meta));
-    meta->data = str;
+    meta->data = data;
+    meta->size = size;
 
     BUILD_IO_STEP(send);
 }
@@ -186,7 +186,7 @@ process_connection(struct connection *conn)
 
         switch(s) {
         case IO_OK:
-            if (*steps_head->handle && (*steps_head->handle)(conn) == C_CLOSE) {
+            if (*steps_head->handler && (*steps_head->handler)(conn) == C_CLOSE) {
                 run = 0;
             }
             MOVE_NEXT_AND_CLEAN(steps_head);

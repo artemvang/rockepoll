@@ -1,41 +1,49 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <signal.h>
-#include <stdio.h>
 #include <string.h>
 #include <sys/epoll.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
+#include <stdio.h>
 #include <err.h>
 
 #include "io.h"
-#include "http.h"
+#include "http/handler.h"
 #include "utils.h"
+#include "log.h"
 #include "utlist.h"
 
-
-#define MAXFDS 1024
+#define MAXFDS 128
 #define SERVER_FD_COUNT 8
 #define KEEP_ALIVE_TIMEOUT 5
 
-#define CLOSE_CONN(__conn, __peers_count)                                                      \
+#if defined(__GNUC__) || defined(__INTEL_COMPILER)
+# define UNUSED __attribute__((__unused__))
+#else
+# define UNUSED
+#endif
+
+#define CLOSE_CONN(__connections, __conn, __peers_count)                                                      \
 do {                                                                                           \
     close((__conn)->fd);                                                                       \
     FREE_IO_STEPS((__conn)->steps);                                                            \
-    LL_DELETE(connections, (__conn));                                                          \
+    DL_DELETE(__connections, __conn);                                                          \
+    free(__conn);                                                                              \
     __peers_count--;                                                                           \
 } while (0)
 
 
-char *argv0;
+static char *argv0;
+
+/* command line parameters */
+static int   port = 7887;
+static int   keep_alive = 0;
+static int   quiet = 0;
+static char *listen_addr = "127.0.0.1";
 
 static int listenfd, epollfd, peers_count = 0;
-static volatile int loop = 1;
-
-/* parameters from command line */
-static int port = 7887; 
-static int keep_alive = 1; 
-static char *listen_addr = "127.0.0.1"; 
+static int loop = 1;
 
 
 static void
@@ -97,17 +105,6 @@ accept_peers_loop(struct connection **connections, struct connection *fd2connect
                 errx(1, "setsockopt(), can't set TCP_NODELAY for peer socket");
             }
 
-            conn = xmalloc(sizeof(struct connection));
-            conn->fd = peerfd;
-            conn->last_active = last_active;
-            conn->status = C_RUN;
-            conn->keep_alive = keep_alive;
-            conn->steps = NULL;
-            setup_read_io_step(conn, IO_FLAG_NONE, build_response);
-
-            DL_PREPEND(*connections, conn);    
-            fd2connection[peerfd] = conn;
-
             peer_event.data.fd = peerfd;
             peer_event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
             if (UNLIKELY(epoll_ctl(epollfd, EPOLL_CTL_ADD, peerfd, &peer_event) < 0)) {
@@ -116,24 +113,74 @@ accept_peers_loop(struct connection **connections, struct connection *fd2connect
                 continue;
             }
 
+            conn = xmalloc(sizeof(struct connection));
+
+            memset(conn->ip, 0, sizeof(conn->ip));
+            strcpy(conn->ip, inet_ntoa(connection_addr.sin_addr));
+            conn->fd = peerfd;
+            conn->last_active = last_active;
+            conn->status = C_RUN;
+            conn->keep_alive = keep_alive;
+            conn->steps = NULL;
+            setup_read_io_step(conn, IO_FLAG_NONE, build_response);
+
+            DL_APPEND(*connections, conn);    
+            fd2connection[peerfd] = conn;
+
             peers_count++;
         }
     }
 }
 
 
-static ALWAYS_INLINE void
-int_handler(int dummy unused)
+static void
+usage()
 {
-    loop = 0;
+    printf("usage: %s [--addr addr] [--port port] [--quiet] [--keep-alive]\n", argv0);
+    exit(0);
 }
 
 
-static ALWAYS_INLINE void
-usage()
+static void
+parse_args(int argc, char *argv[])
 {
-    printf("usage: %s [-l listen] [-p port] [-k] [-h]\n", argv0);
-    exit(0);
+    int i;
+    argv0 = argv[0];
+
+    if (argc == 2 && !strcmp(argv[1], "--help")) {
+        usage();
+    }
+
+    for (i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--port")) {
+            if (++i >= argc) {
+                errx(1, "missing number after --port");
+            }
+            port = atoi(argv[i]);
+        }
+        else if (!strcmp(argv[i], "--addr")) {
+            if (++i >= argc) {
+                errx(1, "missing ip after --addr");
+            }
+            listen_addr = argv[i];
+        }
+        else if (!strcmp(argv[i], "--quiet")) {
+            quiet = 1;
+        }
+        else if (!strcmp(argv[i], "--keep-alive")) {
+            keep_alive = 1;
+        }
+        else {
+            errx(1, "unknown argument `%s'", argv[i]);
+        }
+    }
+}
+
+
+static void
+int_handler(int dummy UNUSED)
+{
+    loop = 0;
 }
 
 
@@ -150,22 +197,9 @@ main(int argc, char *argv[])
     signal(SIGINT, int_handler);
     signal(SIGPIPE, SIG_IGN);
 
-    ARGBEGIN {
-    case 'p':
-        port = atoi(EARGF(usage()));
-        break;
-    case 'l':
-        listen_addr = EARGF(usage());
-        break;
-    case 'k':
-        keep_alive = 1;
-        break;
-    case 'h':
-        usage();
-        break;
-    default:
-        break;
-    } ARGEND;
+    parse_args(argc, argv);
+
+    log_setup(quiet);
 
     create_listen_socket();
 
@@ -180,12 +214,13 @@ main(int argc, char *argv[])
         errx(1, "epoll_ctl(), can't add listen socket to epoll");
     }
 
+    printf("listening on http://%s:%d/\n", listen_addr, port);
     while (loop) {
         now = time(NULL);
 
         DL_FOREACH_SAFE(connections, conn, tmp_conn) {
             if (difftime(now, conn->last_active) > KEEP_ALIVE_TIMEOUT) {
-                CLOSE_CONN(conn, peers_count);
+                CLOSE_CONN(connections, conn, peers_count);
             }
         }
 
@@ -208,17 +243,21 @@ main(int argc, char *argv[])
                 ev.events & EPOLLERR ||
                 ev.events & EPOLLRDHUP)
             {
-                CLOSE_CONN(conn, peers_count);
+                CLOSE_CONN(connections, conn, peers_count);
             }
             else {
                 process_connection(conn);
                 if (conn->status == C_CLOSE) {
-                    CLOSE_CONN(conn, peers_count);
+                    CLOSE_CONN(connections, conn, peers_count);
                 } else {
                     conn->last_active = now;
                 }
             }
         }
+    }
+
+    DL_FOREACH_SAFE(connections, conn, tmp_conn) {
+        CLOSE_CONN(connections, conn, peers_count);
     }
 
     close(epollfd);
