@@ -12,16 +12,16 @@
 #define SENDFILE_CHUNK_SIZE 1024 * 512
 
 
-#define BUILD_IO_STEP(__step_type)                                                             \
+#define BUILD_IO_STEP(step_type)                                                               \
 do {                                                                                           \
     struct io_step *__step = xmalloc(sizeof(struct io_step));                                  \
     __step->io_flags = io_flags;                                                               \
     __step->meta = meta;                                                                       \
-    __step->step = make_ ## __step_type ## _step;                                              \
+    __step->step = make_ ## step_type ## _step;                                                \
     __step->handler = handler;                                                                 \
-    __step->clean = clean_ ## __step_type ## _step;                                            \
+    __step->clean = clean_ ## step_type ## _step;                                              \
     __step->next = NULL;                                                                       \
-    LL_APPEND(conn->steps, __step);                                                            \
+    LL_APPEND(*steps, __step);                                                                 \
 } while(0)
 
 
@@ -132,7 +132,7 @@ make_read_step(struct connection *conn)
 
 
 ALWAYS_INLINE void
-setup_sendfile_io_step(struct connection *conn,
+setup_sendfile_io_step(struct io_step **steps,
                        int io_flags,
                        int infd, off_t lower, off_t upper, off_t size,
                        enum conn_status (*handler)(struct connection *conn))
@@ -148,7 +148,7 @@ setup_sendfile_io_step(struct connection *conn,
 
 
 ALWAYS_INLINE void
-setup_send_io_step(struct connection *conn,
+setup_send_io_step(struct io_step **steps,
                    int io_flags,
                    char *data, size_t size,
                    enum conn_status (*handler)(struct connection *conn))
@@ -162,7 +162,7 @@ setup_send_io_step(struct connection *conn,
 
 
 ALWAYS_INLINE void
-setup_read_io_step(struct connection *conn,
+setup_read_io_step(struct io_step **steps,
                    int io_flags, 
                    enum conn_status (*handler)(struct connection *conn))
 {

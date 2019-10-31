@@ -19,7 +19,7 @@ decode_hex_digit(int ch)
 
 
 static void
-url_decode(char *target)
+decode_target(char *target)
 {
     char *ch, *decoded;
 
@@ -43,14 +43,14 @@ url_decode(char *target)
 
 
 int
-parse_request(char *data, struct http_request *r)
+parse_request(char *data, struct http_request *req)
 {
     int i;
     char *q, *p = data;
 
     for (i = M_GET; i < HTTP_METHODS_COUNT; i++) {
         if (!strncmp(p, http_methods[i].name, http_methods[i].size)) {
-            r->method = i;
+            req->method = i;
             p += http_methods[i].size;
             break;
         }
@@ -71,8 +71,8 @@ parse_request(char *data, struct http_request *r)
     }
     *q++ = '\0';
 
-    r->target = p;
-    url_decode(r->target);
+    req->target = p;
+    decode_target(req->target);
 
     p = q;
 
@@ -88,10 +88,10 @@ parse_request(char *data, struct http_request *r)
         if (*p++ == '.') {
             switch(*p++) {
             case '0':
-                r->version = V10;
+                req->version = V10;
                 break;
             case '1':
-                r->version = V11;
+                req->version = V11;
                 break;
             default:
                 return -1;
@@ -105,7 +105,7 @@ parse_request(char *data, struct http_request *r)
         if (*p++ == '.') {
             switch(*p++) {
             case '0':
-                r->version = V20;
+                req->version = V20;
                 break;
             default:
                 return -1;
@@ -158,7 +158,7 @@ parse_request(char *data, struct http_request *r)
         }
 
         *q = '\0';
-        r->headers[i] = p;
+        req->headers[i] = p;
 
         /* go to next line */
         p = q + sizeof("\r\n") - 1;

@@ -15,7 +15,6 @@
 #include "utlist.h"
 
 #define MAXFDS 128
-#define SERVER_FD_COUNT 8
 #define KEEP_ALIVE_TIMEOUT 5
 
 #if defined(__GNUC__) || defined(__INTEL_COMPILER)
@@ -24,13 +23,12 @@
 # define UNUSED
 #endif
 
-#define CLOSE_CONN(__connections, __conn, __peers_count)                                                      \
+#define CLOSE_CONN(conn)                                                                       \
 do {                                                                                           \
-    close((__conn)->fd);                                                                       \
-    FREE_IO_STEPS((__conn)->steps);                                                            \
-    DL_DELETE(__connections, __conn);                                                          \
-    free(__conn);                                                                              \
-    __peers_count--;                                                                           \
+    close((conn)->fd);                                                                         \
+    FREE_IO_STEPS((conn)->steps);                                                              \
+    DL_DELETE(connections, conn);                                                              \
+    free(conn);                                                                                \
 } while (0)
 
 
@@ -42,7 +40,7 @@ static int   keep_alive = 0;
 static int   quiet = 0;
 static char *listen_addr = "127.0.0.1";
 
-static int listenfd, epollfd, peers_count = 0;
+static int listenfd, epollfd;
 static int loop = 1;
 
 
@@ -78,18 +76,15 @@ create_listen_socket()
 
 
 static void
-accept_peers_loop(struct connection **connections, struct connection *fd2connection[])
+accept_peers_loop(struct connection **connections, struct connection *fd2conn[], time_t now)
 {
     int                  peerfd, opt;
     struct sockaddr_in   connection_addr;
     struct connection   *conn;
     struct epoll_event   peer_event = {0};
     socklen_t            connection_addr_len = sizeof(connection_addr);
-    time_t               last_active;
 
-    last_active = time(NULL);
-
-    while (peers_count < MAXFDS) {
+    while (1) {
         peerfd = accept4(listenfd,
                          (struct sockaddr *)&connection_addr,
                          &connection_addr_len, SOCK_NONBLOCK);
@@ -98,6 +93,10 @@ accept_peers_loop(struct connection **connections, struct connection *fd2connect
             if (LIKELY(errno != EAGAIN && errno != EWOULDBLOCK)) {
                 warnx("accept4()");
             }
+            break;
+        }
+        else if (peerfd >= MAXFDS) {
+            close(peerfd);
             break;
         } else {
             opt = 1;
@@ -118,16 +117,16 @@ accept_peers_loop(struct connection **connections, struct connection *fd2connect
             memset(conn->ip, 0, sizeof(conn->ip));
             strcpy(conn->ip, inet_ntoa(connection_addr.sin_addr));
             conn->fd = peerfd;
-            conn->last_active = last_active;
+            conn->last_active = now;
             conn->status = C_RUN;
             conn->keep_alive = keep_alive;
             conn->steps = NULL;
-            setup_read_io_step(conn, IO_FLAG_NONE, build_response);
+            conn->next = NULL;
+            conn->prev = NULL;
+            setup_read_io_step(&(conn->steps), 0, build_response);
 
             DL_APPEND(*connections, conn);    
-            fd2connection[peerfd] = conn;
-
-            peers_count++;
+            fd2conn[peerfd] = conn;
         }
     }
 }
@@ -190,9 +189,9 @@ main(int argc, char *argv[])
     int                  nready, fd;
     time_t               now;
     struct epoll_event   ev, listen_event = {0};
-    struct epoll_event   events[MAXFDS + SERVER_FD_COUNT] = {0};
+    struct epoll_event   events[MAXFDS] = {0};
     struct connection   *tmp_conn, *conn, *connections = NULL;
-    struct connection   *fd2connection[MAXFDS + SERVER_FD_COUNT] = {0};
+    struct connection   *fd2conn[MAXFDS] = {0};
 
     signal(SIGINT, int_handler);
     signal(SIGPIPE, SIG_IGN);
@@ -220,7 +219,7 @@ main(int argc, char *argv[])
 
         DL_FOREACH_SAFE(connections, conn, tmp_conn) {
             if (difftime(now, conn->last_active) > KEEP_ALIVE_TIMEOUT) {
-                CLOSE_CONN(connections, conn, peers_count);
+                CLOSE_CONN(conn);
             }
         }
 
@@ -233,22 +232,20 @@ main(int argc, char *argv[])
         while (nready) {
             ev = events[--nready];
             fd = ev.data.fd;
-            conn = fd2connection[fd];
+            conn = fd2conn[fd];
 
             if (fd == listenfd) {
-                accept_peers_loop(&connections, fd2connection);
-            }
-            else if (
+                accept_peers_loop(&connections, fd2conn, now);
+            } else if (
                 ev.events & EPOLLHUP ||
                 ev.events & EPOLLERR ||
                 ev.events & EPOLLRDHUP)
             {
-                CLOSE_CONN(connections, conn, peers_count);
-            }
-            else {
+                CLOSE_CONN(conn);
+            } else {
                 process_connection(conn);
                 if (conn->status == C_CLOSE) {
-                    CLOSE_CONN(connections, conn, peers_count);
+                    CLOSE_CONN(conn);
                 } else {
                     conn->last_active = now;
                 }
@@ -257,7 +254,7 @@ main(int argc, char *argv[])
     }
 
     DL_FOREACH_SAFE(connections, conn, tmp_conn) {
-        CLOSE_CONN(connections, conn, peers_count);
+        CLOSE_CONN(conn);
     }
 
     close(epollfd);

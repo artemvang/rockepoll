@@ -11,7 +11,6 @@
 
 
 #define MAX_REQ_SIZE 4096
-#define IO_FLAG_NONE 0
 #define IO_FLAG_SEND_CORK MSG_MORE
 
 #define MOVE_NEXT_AND_CLEAN(__head)                                                            \
@@ -79,19 +78,19 @@ struct connection {
 
 void process_connection(struct connection *conn);
 
-void setup_read_io_step(struct connection *conn,
+void setup_read_io_step(struct io_step **steps,
                         int io_flags,
-                        enum conn_status (*process_result)(struct connection *conn));
+                        enum conn_status (*handler)(struct connection *conn));
 
-void setup_send_io_step(struct connection *conn,
+void setup_send_io_step(struct io_step **steps,
                         int io_flags,
                         char *data, size_t size,
-                        enum conn_status (*process_result)(struct connection *conn));
+                        enum conn_status (*handler)(struct connection *conn));
 
-void setup_sendfile_io_step(struct connection *conn,
+void setup_sendfile_io_step(struct io_step **steps,
                             int io_flags,
                             int infd, off_t lower, off_t upper, off_t size,
-                            enum conn_status (*process_result)(struct connection *conn));
+                            enum conn_status (*handler)(struct connection *conn));
 
 
 #endif
