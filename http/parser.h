@@ -2,14 +2,14 @@
 #ifndef HTTP_PARSER_H
 #define HTTP_PARSER_H
 
-#define MAPPING_ENTRY(__enum, __str)                                                            \
-    [__enum] = { .name=__str, .size=sizeof(__str) - 1 }
+#define MAPPING_ENTRY(enm, str)                                                                 \
+    [enm] = { .name=str, .size=sizeof(str) - 1 }
 
-#define ENUM_MAPPING(__name)                                                                    \
+#define ENUM_MAPPING(s_name)                                                                    \
     static const struct {                                                                       \
         char *name;                                                                             \
         size_t size;                                                                            \
-    } __name[] =
+    } s_name[] =
 
 enum http_header {
     H_RANGE,
