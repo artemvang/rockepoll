@@ -14,7 +14,7 @@
 #include "log.h"
 #include "utlist.h"
 
-#define MAXFDS 128
+#define MAXFDS 1024 * 4
 #define KEEP_ALIVE_TIMEOUT 5
 
 #if defined(__GNUC__) || defined(__INTEL_COMPILER)
