@@ -76,7 +76,7 @@ create_listen_socket()
 
 
 static void
-accept_peers_loop(struct connection **connections, struct connection *fd2conn[], time_t now)
+accept_peers_loop(struct connection **connections, time_t now)
 {
     int                  peerfd, opt;
     struct sockaddr_in   connection_addr;
@@ -94,22 +94,10 @@ accept_peers_loop(struct connection **connections, struct connection *fd2conn[],
                 warnx("accept4()");
             }
             break;
-        }
-        else if (peerfd >= MAXFDS) {
-            close(peerfd);
-            break;
         } else {
             opt = 1;
             if (UNLIKELY(setsockopt(peerfd, SOL_TCP, TCP_NODELAY, &opt, sizeof(opt)))) {
                 errx(1, "setsockopt(), can't set TCP_NODELAY for peer socket");
-            }
-
-            peer_event.data.fd = peerfd;
-            peer_event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
-            if (UNLIKELY(epoll_ctl(epollfd, EPOLL_CTL_ADD, peerfd, &peer_event) < 0)) {
-                warnx("epoll_ctl(), can't add peer socket to epoll");
-                close(peerfd);
-                continue;
             }
 
             conn = xmalloc(sizeof(struct connection));
@@ -125,8 +113,15 @@ accept_peers_loop(struct connection **connections, struct connection *fd2conn[],
             conn->prev = NULL;
             setup_read_io_step(&(conn->steps), 0, build_response);
 
-            DL_APPEND(*connections, conn);    
-            fd2conn[peerfd] = conn;
+            DL_APPEND(*connections, conn);
+
+            peer_event.data.ptr = conn;
+            peer_event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
+            if (UNLIKELY(epoll_ctl(epollfd, EPOLL_CTL_ADD, peerfd, &peer_event) < 0)) {
+                warnx("epoll_ctl(), can't add peer socket to epoll");
+                close(peerfd);
+                continue;
+            }
         }
     }
 }
@@ -186,12 +181,11 @@ int_handler(int dummy UNUSED)
 int
 main(int argc, char *argv[])
 {
-    int                  nready, fd;
+    int                  nready;
     time_t               now;
     struct epoll_event   ev, listen_event = {0};
     struct epoll_event   events[MAXFDS] = {0};
     struct connection   *tmp_conn, *conn, *connections = NULL;
-    struct connection   *fd2conn[MAXFDS] = {0};
 
     signal(SIGINT, int_handler);
     signal(SIGPIPE, SIG_IGN);
@@ -207,7 +201,7 @@ main(int argc, char *argv[])
         errx(1, "epoll_create1()");
     }
 
-    listen_event.data.fd = listenfd;
+    listen_event.data.ptr = &listenfd;
     listen_event.events = EPOLLIN | EPOLLET;
     if (epoll_ctl(epollfd, EPOLL_CTL_ADD, listenfd, &listen_event) < 0) {
         errx(1, "epoll_ctl(), can't add listen socket to epoll");
@@ -231,11 +225,16 @@ main(int argc, char *argv[])
 
         while (nready) {
             ev = events[--nready];
-            fd = ev.data.fd;
-            conn = fd2conn[fd];
+            conn = ev.data.ptr;
 
-            if (fd == listenfd) {
-                accept_peers_loop(&connections, fd2conn, now);
+            /*
+                In this case conn does not reference to connection's struct,
+                but references to address of listenfd variable. It works because
+                connection's struct first element is fd, so dereferencing gives
+                in both cases fd variable
+            */
+            if (conn->fd  == listenfd) {
+                accept_peers_loop(&connections, now);
             } else if (
                 ev.events & EPOLLHUP ||
                 ev.events & EPOLLERR ||
