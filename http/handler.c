@@ -12,6 +12,7 @@
 
 
 #define ETAG_SIZE 64
+#define INDEX_PAGE "index.html"
 #define DEFAULT_MIMETYPE "application/octet-stream"
 #define HTTP_STATUS_TEMPLATE "<h1>%s</h1>"
 #define HTTP_STATUS_TEMPLATE_SIZE (sizeof(HTTP_STATUS_TEMPLATE) - 2 - 1)
@@ -51,6 +52,7 @@ static const struct {
     { "htm",   "text/html; charset=utf-8" },
     { "css",   "text/css; charset=utf-8" },
     { "txt",   "text/plain; charset=utf-8" },
+    { "vtt",   "text/plain; charset=utf-8" },
     { "md",    "text/plain; charset=utf-8" },
     { "c",     "text/plain; charset=utf-8" },
     { "h",     "text/plain; charset=utf-8" },
@@ -224,6 +226,10 @@ build_response(struct connection *conn)
 
     if (req.headers[H_CONNECTION] && !strcmp(req.headers[H_CONNECTION], "close")) {
         conn->keep_alive = 0;
+    }
+
+    if (*req.target == '\0') {
+        req.target = INDEX_PAGE;
     }
 
     switch(gather_file_meta(req.target, &file_meta)) {
