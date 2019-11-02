@@ -176,8 +176,8 @@ close_on_keep_alive(struct connection *conn)
 static void
 build_http_status_step(enum http_status st, struct connection *conn, const struct http_request *req)
 {
-    size_t content_length, size;
     char *data;
+    size_t content_length, size;
 
     content_length = strlen(http_status_str[st]) + HTTP_STATUS_TEMPLATE_SIZE;
     data = xmalloc(256);
@@ -207,11 +207,11 @@ build_http_status_step(enum http_status st, struct connection *conn, const struc
 enum conn_status
 build_response(struct connection *conn)
 {
-    size_t lower, upper, content_length, size;
     int st;
     char *data, *p;
-    struct file_meta file_meta = {0};
     struct http_request req = {0};
+    struct file_meta file_meta = {0};
+    size_t lower, upper, content_length, size;
 
     st = parse_request(((struct read_meta *)conn->steps->meta)->data, &req);
     if (UNLIKELY(st)) {

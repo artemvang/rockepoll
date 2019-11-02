@@ -55,9 +55,7 @@ make_sendfile_step(struct connection *conn)
 {
     off_t size;
     ssize_t sent_len;
-    struct sendfile_meta *meta;
-
-    meta = conn->steps->meta;
+    struct sendfile_meta *meta = conn->steps->meta;
 
     do {
         size = MIN(SENDFILE_CHUNK_SIZE, meta->size);
@@ -80,12 +78,9 @@ make_sendfile_step(struct connection *conn)
 static enum io_step_status
 make_send_step(struct connection *conn)
 {
-    int flags;
     ssize_t write_size;
-    struct send_meta *meta;
-
-    flags = conn->steps->io_flags;
-    meta = conn->steps->meta;
+    int flags = conn->steps->io_flags;
+    struct send_meta *meta = conn->steps->meta;
 
     write_size = send(conn->fd, meta->data, meta->size, flags);
     if (write_size < 0) {
@@ -104,11 +99,10 @@ static enum io_step_status
 make_read_step(struct connection *conn)
 {
     ssize_t read_size;
-    struct read_meta *req;
+    struct read_meta *meta = conn->steps->meta;
 
-    req = conn->steps->meta;
     do {
-        read_size = read(conn->fd, req->data + req->size, MIN(REQ_BUF_SIZE, MAX_REQ_SIZE - req->size));
+        read_size = read(conn->fd, meta->data + meta->size, MIN(REQ_BUF_SIZE, MAX_REQ_SIZE - meta->size));
 
         if (read_size < 1) {
             if (LIKELY(read_size < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
@@ -118,14 +112,14 @@ make_read_step(struct connection *conn)
             return IO_ERROR;
         }
 
-        req->size += read_size;
+        meta->size += read_size;
 
-    } while (read_size == REQ_BUF_SIZE && req->size < MAX_REQ_SIZE);
+    } while (read_size == REQ_BUF_SIZE && meta->size < MAX_REQ_SIZE);
 
-    if (UNLIKELY(!req->size || req->size == MAX_REQ_SIZE)) {
+    if (UNLIKELY(!meta->size || meta->size == MAX_REQ_SIZE)) {
         return IO_ERROR;
     }
-    req->data[req->size] = '\0';
+    meta->data[meta->size] = '\0';
 
     return IO_OK;
 }
