@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 #include <sys/stat.h>
 
 #include "../io.h"
@@ -14,8 +15,11 @@
 #define ETAG_SIZE 64
 #define INDEX_PAGE "index.html"
 #define DEFAULT_MIMETYPE "application/octet-stream"
-#define HTTP_STATUS_TEMPLATE "<h1>%s</h1>"
-#define HTTP_STATUS_TEMPLATE_SIZE (sizeof(HTTP_STATUS_TEMPLATE) - 2 - 1)
+#define HTTP_STATUS_FORMAT "<h1>%s</h1>"
+#define HTTP_STATUS_FORMAT_SIZE (sizeof(HTTP_STATUS_FORMAT) - 2 - 1)
+#define LOG_MESSAGE_FORMAT "%s [%s] \"%s\" %d %lu \"%s\"\n"
+#define REQUEST_LINE_FORMAT "%s /%s HTTP/%s"
+#define TIMESTAMP_FORMAT "%a, %d/%b/%Y %H:%M:%S GMT"
 
 
 enum http_status {
@@ -90,18 +94,37 @@ static const char *http_status_str[] = {
 
 
 static void
-log_new_connection(const struct connection *conn, const struct http_request *req, enum http_status st)
+log_new_connection(const struct connection *conn,
+                   const struct http_request *req,
+                   enum http_status status,
+                   size_t content_lenght)
 {
-    char *user_agent;
+    struct tm *tm;
+    char timestamp[32] = {0};
+    char *user_agent = "-";
+    char *request_line = "-";
 
-    if (st != S_BAD_REQUEST) {
-        user_agent = req->headers[H_USER_AGENT];
-        log_log("%s %ld \"%s /%s HTTP/%s\" %d \"%s\"\n",
-            conn->ip, conn->last_active,
-            http_methods[req->method].name, req->target, http_versions[req->version].name,
-            st, (user_agent) ? user_agent : "");
-    } else {
-        log_log("%s %ld \"-\" %d \"-\"\n", conn->ip, conn->last_active, st);
+    if (LIKELY(status != S_BAD_REQUEST)) {
+        if (req->headers[H_USER_AGENT]) {
+            user_agent = req->headers[H_USER_AGENT];
+        }
+
+        request_line = xmalloc(strlen(req->target) + 32);
+        sprintf(request_line, REQUEST_LINE_FORMAT,
+                http_methods[req->method].name,
+                req->target,
+                http_versions[req->version].name);
+    }
+
+    tm = gmtime(&conn->last_active);
+    strftime(timestamp, sizeof(timestamp), TIMESTAMP_FORMAT, tm);
+
+    log_log(LOG_MESSAGE_FORMAT,
+            conn->ip, timestamp, request_line,
+            status, content_lenght,user_agent);
+
+    if (LIKELY(status != S_BAD_REQUEST)) {
+        free(request_line);
     }
 }
 
@@ -179,7 +202,7 @@ build_http_status_step(enum http_status st, struct connection *conn, const struc
     char *data;
     size_t content_length, size;
 
-    content_length = strlen(http_status_str[st]) + HTTP_STATUS_TEMPLATE_SIZE;
+    content_length = strlen(http_status_str[st]) + HTTP_STATUS_FORMAT_SIZE;
     data = xmalloc(256);
     size = 0;
 
@@ -193,14 +216,14 @@ build_http_status_step(enum http_status st, struct connection *conn, const struc
         size += sprintf(data + size, "Connection: close\r\n\r\n");
     }
 
-    size += sprintf(data + size, HTTP_STATUS_TEMPLATE, http_status_str[st]);
+    size += sprintf(data + size, HTTP_STATUS_FORMAT, http_status_str[st]);
 
     setup_send_io_step(&(conn->steps),
                        0,
                        data, size,
                        close_on_keep_alive);
 
-    log_new_connection(conn, req, st);
+    log_new_connection(conn, req, st, content_length);
 }
 
 
@@ -322,7 +345,7 @@ build_response(struct connection *conn)
                            0,
                            file_meta.fd, lower, upper + 1, content_length, close_on_keep_alive);
 
-    log_new_connection(conn, &req, st);
+    log_new_connection(conn, &req, st, content_length);
 
     return C_RUN;
 }
