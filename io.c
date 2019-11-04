@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/sendfile.h>
 #include <fcntl.h>
@@ -12,54 +13,26 @@
 #define SENDFILE_CHUNK_SIZE 1024 * 512
 
 
-#define BUILD_IO_STEP(step_type)                                                               \
+#define BUILD_IO_STEP(steps, meta, step_type, handler)                                         \
 do {                                                                                           \
     struct io_step *__step = xmalloc(sizeof(struct io_step));                                  \
-    __step->io_flags = io_flags;                                                               \
     __step->meta = meta;                                                                       \
-    __step->step = make_ ## step_type ## _step;                                                \
+    __step->type = step_type;                                                                  \
     __step->handler = handler;                                                                 \
-    __step->clean = clean_ ## step_type ## _step;                                              \
     __step->next = NULL;                                                                       \
     LL_APPEND(*steps, __step);                                                                 \
-} while(0)
-
-
-static ALWAYS_INLINE void
-clean_read_step(void *meta)
-{
-    free(meta);
-}
-
-
-static ALWAYS_INLINE void
-clean_send_step(void *meta)
-{
-    struct send_meta *h = meta;
-    free(h->data);
-    free(meta);
-}
-
-
-static ALWAYS_INLINE void
-clean_sendfile_step(void *meta)
-{   
-    struct sendfile_meta *f = meta;
-    close(f->infd);
-    free(meta);
-}
+} while(0);
 
 
 static enum io_step_status
-make_sendfile_step(struct connection *conn)
+make_sendfile_step(int fd, struct sendfile_meta *meta)
 {
     off_t size;
     ssize_t sent_len;
-    struct sendfile_meta *meta = conn->steps->meta;
 
     do {
         size = MIN(SENDFILE_CHUNK_SIZE, meta->size);
-        sent_len = sendfile(conn->fd, meta->infd, &(meta->start_offset), size);
+        sent_len = sendfile(fd, meta->fd, &meta->start_offset, size);
         if (sent_len < 0) {
             if (LIKELY(errno == EAGAIN || errno == EWOULDBLOCK)) {
                 return IO_AGAIN;
@@ -76,33 +49,35 @@ make_sendfile_step(struct connection *conn)
 
 
 static enum io_step_status
-make_send_step(struct connection *conn)
+make_write_step(int fd, struct send_meta *meta)
 {
     ssize_t write_size;
-    int flags = conn->steps->io_flags;
-    struct send_meta *meta = conn->steps->meta;
+    int flags = (meta->more_ahead) ? MSG_MORE : 0;
 
-    write_size = send(conn->fd, meta->data, meta->size, flags);
-    if (write_size < 0) {
-        if (LIKELY(errno == EAGAIN || errno == EWOULDBLOCK)) {
-            return IO_AGAIN;
+    do {
+        write_size = send(fd, meta->data + meta->offset, meta->size, flags);
+        if (write_size < 0) {
+            if (LIKELY(errno == EAGAIN || errno == EWOULDBLOCK)) {
+                return IO_AGAIN;
+            }
+
+            return IO_ERROR;
         }
 
-        return IO_ERROR;
-    }
+        meta->offset += write_size;
+    } while (meta->offset < meta->size);
 
     return IO_OK;
 }
 
 
 static enum io_step_status
-make_read_step(struct connection *conn)
+make_read_step(int fd, struct read_meta *meta)
 {
     ssize_t read_size;
-    struct read_meta *meta = conn->steps->meta;
 
     do {
-        read_size = read(conn->fd, meta->data + meta->size, MIN(REQ_BUF_SIZE, MAX_REQ_SIZE - meta->size));
+        read_size = read(fd, meta->data + meta->size, MIN(REQ_BUF_SIZE, MAX_REQ_SIZE - meta->size));
 
         if (read_size < 1) {
             if (LIKELY(read_size < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
@@ -113,7 +88,6 @@ make_read_step(struct connection *conn)
         }
 
         meta->size += read_size;
-
     } while (read_size == REQ_BUF_SIZE && meta->size < MAX_REQ_SIZE);
 
     if (UNLIKELY(!meta->size || meta->size == MAX_REQ_SIZE)) {
@@ -125,45 +99,102 @@ make_read_step(struct connection *conn)
 }
 
 
-ALWAYS_INLINE void
-setup_sendfile_io_step(struct io_step **steps,
-                       int io_flags,
-                       int infd, off_t lower, off_t upper, off_t size,
-                       enum conn_status (*handler)(struct connection *conn))
+static enum io_step_status
+make_step(int fd, struct io_step *step)
 {
-    struct sendfile_meta *meta = xmalloc(sizeof(struct sendfile_meta));
-    meta->infd = infd;
-    meta->start_offset = lower;
-    meta->end_offset = upper;
-    meta->size = size;
+    enum io_step_status s;
 
-    BUILD_IO_STEP(sendfile);
+    switch (step->type) {
+    case S_READ:
+        s = make_read_step(fd, step->meta);
+        break;
+    case S_WRITE:
+        s = make_write_step(fd, step->meta);
+        break;
+    case S_SENDFILE:
+        s = make_sendfile_step(fd, step->meta);
+        break;
+    }
+
+    return s;
+}
+
+
+static void
+cleanup_step(struct io_step *step)
+{
+    struct send_meta *s_meta;
+    struct sendfile_meta *sf_meta;
+
+    switch (step->type) {
+    case S_READ:
+        free(step->meta);
+        break;
+    case S_WRITE:
+        s_meta = step->meta;
+        free(s_meta->data);
+        free(s_meta);
+        break;
+    case S_SENDFILE:
+        sf_meta = step->meta;
+        close(sf_meta->fd);
+        free(sf_meta);
+        break;
+    }
+
+    free(step);
+}
+
+
+inline void
+cleanup_steps(struct io_step *head)
+{
+    struct io_step *step, *tmp_step;
+
+    LL_FOREACH_SAFE(head, step, tmp_step) {
+        cleanup_step(step);
+    }
 }
 
 
 ALWAYS_INLINE void
-setup_send_io_step(struct io_step **steps,
-                   int io_flags,
-                   char *data, size_t size,
+setup_sendfile_io_step(struct io_step **steps,
+                       int fd, off_t lower, off_t upper, off_t size,
+                       enum conn_status (*handler)(struct connection *conn))
+{
+    struct sendfile_meta *meta = xmalloc(sizeof(struct sendfile_meta));
+    meta->fd = fd;
+    meta->start_offset = lower;
+    meta->end_offset = upper;
+    meta->size = size;
+
+    BUILD_IO_STEP(steps, meta, S_SENDFILE, handler)
+}
+
+
+ALWAYS_INLINE void
+setup_write_io_step(struct io_step **steps,
+                   char *data, int more_ahead, size_t size,
                    enum conn_status (*handler)(struct connection *conn))
 {
     struct send_meta *meta = xmalloc(sizeof(struct send_meta));
     meta->data = data;
+    meta->more_ahead = more_ahead;
     meta->size = size;
+    meta->offset = 0;
 
-    BUILD_IO_STEP(send);
+    BUILD_IO_STEP(steps, meta, S_WRITE, handler)
 }
 
 
 ALWAYS_INLINE void
 setup_read_io_step(struct io_step **steps,
-                   int io_flags, 
                    enum conn_status (*handler)(struct connection *conn))
 {
     struct read_meta *meta = xmalloc(sizeof(struct read_meta));
     meta->size = 0;
 
-    BUILD_IO_STEP(read);
+    BUILD_IO_STEP(steps, meta, S_READ, handler)
 }
 
 
@@ -172,18 +203,22 @@ process_connection(struct connection *conn)
 {
     int run = 1;
     enum io_step_status s;
-    struct io_step *steps_head;
+    struct io_step *steps_head, *step;
 
     while (run && conn->steps) {
-        steps_head = conn->steps;
-        s = (*steps_head->step)(conn);
+        steps_head = step = conn->steps;
+        s = make_step(conn->fd, steps_head);
 
         switch(s) {
         case IO_OK:
             if (*steps_head->handler && (*steps_head->handler)(conn) == C_CLOSE) {
                 run = 0;
             }
-            MOVE_NEXT_AND_CLEAN(steps_head);
+
+            /* cleanup IO step */
+            cleanup_step(step);
+            LL_DELETE(steps_head, step);
+
             if (!steps_head) {
                 conn->status = C_CLOSE;
                 run = 0;

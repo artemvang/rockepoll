@@ -18,7 +18,7 @@ log_setup(int quiet_mode)
 }
 
 
-void
+inline void
 log_log(const char *format, ...)
 {
     va_list va;

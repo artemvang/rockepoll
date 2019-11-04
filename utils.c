@@ -9,23 +9,23 @@
 #include "utils.h"
 
 
-void *
+inline void *
 xmalloc(const size_t size)
 {
     void *ptr = malloc(size);
-    if (!ptr) {
-        errx(1, "malloc(), can't allocate %zu bytes", size);
+    if (UNLIKELY(!ptr)) {
+        err(1, "malloc(), can't allocate %zu bytes", size);
     }
     return ptr;
 }
 
 
-void *
+inline void *
 xrealloc(void *original, const size_t size)
 {
     void *ptr = realloc(original, size);
-    if (!ptr) {
-        errx(1, "realloc(), can't reallocate %zu bytes", size);
+    if (UNLIKELY(!ptr)) {
+        err(1, "realloc(), can't reallocate %zu bytes", size);
     }
     return ptr;
 }

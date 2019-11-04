@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 
 #include "../io.h"
@@ -184,11 +185,11 @@ gather_file_meta(const char *target, struct file_meta *file_meta)
 }
 
 
-static enum conn_status
+static inline enum conn_status
 close_on_keep_alive(struct connection *conn)
 {
     if (conn->keep_alive) {
-        setup_read_io_step(&(conn->steps), 0, build_response);
+        setup_read_io_step(&(conn->steps), build_response);
         return C_RUN;
     }
 
@@ -218,10 +219,7 @@ build_http_status_step(enum http_status st, struct connection *conn, const struc
 
     size += sprintf(data + size, HTTP_STATUS_FORMAT, http_status_str[st]);
 
-    setup_send_io_step(&(conn->steps),
-                       0,
-                       data, size,
-                       close_on_keep_alive);
+    setup_write_io_step(&(conn->steps), data, 0, size, close_on_keep_alive);
 
     log_new_connection(conn, req, st, content_length);
 }
@@ -337,12 +335,8 @@ build_response(struct connection *conn)
         size += sprintf(data + size, "Connection: close\r\n\r\n");
     }
 
-    setup_send_io_step(&(conn->steps),
-                       IO_FLAG_SEND_CORK,
-                       data, size, NULL);
-
+    setup_write_io_step(&(conn->steps), data, 1, size, NULL);
     setup_sendfile_io_step(&(conn->steps),
-                           0,
                            file_meta.fd, lower, upper + 1, content_length, close_on_keep_alive);
 
     log_new_connection(conn, &req, st, content_length);

@@ -2,65 +2,42 @@
 #ifndef IO_H
 #define IO_H
 
-#include <sys/types.h>
 #include <time.h>
-#include <stdlib.h>
-#include <netinet/tcp.h>
-
-#include "utlist.h"
-
 
 #define MAX_REQ_SIZE 4096
-#define IO_FLAG_SEND_CORK MSG_MORE
-
-#define MOVE_NEXT_AND_CLEAN(__head)                                                            \
-do {                                                                                           \
-    struct io_step *__step = __head;                                                           \
-    (*(__step)->clean)((__step)->meta);                                                        \
-    LL_DELETE(__head, __step);                                                                 \
-    free(__step);                                                                              \
-} while (0)
-
-#define FREE_IO_STEPS(__head)                                                                  \
-do {                                                                                           \
-    struct io_step *__elt, *__tmp;                                                             \
-    LL_FOREACH_SAFE(__head, __elt, __tmp) {                                                    \
-        (*(__elt)->clean)((__elt)->meta);                                                      \
-        free(__elt);                                                                           \
-    }                                                                                          \
-} while (0)
+#define MAX_REQ_SIZE 4096
 
 
 enum io_step_status {IO_OK, IO_AGAIN, IO_ERROR};
+enum io_step_type {S_READ, S_WRITE, S_SENDFILE};
 enum conn_status {C_RUN, C_CLOSE};
 
 
 struct send_meta {
     char *data;
-    size_t size;
+    int more_ahead;
+    size_t size, offset;
 };
 
 
 struct sendfile_meta {
     off_t start_offset, end_offset, size;
-    int infd;
+    int fd;
 };
 
 
 struct read_meta {
-    size_t size;
     char data[MAX_REQ_SIZE];
+    size_t size;
 };
 
 
 struct connection;
 
 struct io_step {
-    int io_flags;
     void *meta;
-    enum io_step_status (*step)(struct connection *conn);
+    enum io_step_type type;
     enum conn_status (*handler)(struct connection *conn);
-    void (*clean)(void *meta);
     struct io_step *next;
 };
 
@@ -76,20 +53,19 @@ struct connection {
 };
 
 
+void cleanup_steps(struct io_step *head);
+
 void process_connection(struct connection *conn);
 
 void setup_read_io_step(struct io_step **steps,
-                        int io_flags,
                         enum conn_status (*handler)(struct connection *conn));
 
-void setup_send_io_step(struct io_step **steps,
-                        int io_flags,
-                        char *data, size_t size,
+void setup_write_io_step(struct io_step **steps,
+                        char *data, int more_ahead, size_t size,
                         enum conn_status (*handler)(struct connection *conn));
 
 void setup_sendfile_io_step(struct io_step **steps,
-                            int io_flags,
-                            int infd, off_t lower, off_t upper, off_t size,
+                            int fd, off_t lower, off_t upper, off_t size,
                             enum conn_status (*handler)(struct connection *conn));
 
 

@@ -2,10 +2,12 @@
 #include <errno.h>
 #include <signal.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/epoll.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <time.h>
 #include <err.h>
 
 #include "io.h"
@@ -26,7 +28,7 @@
 #define CLOSE_CONN(conn)                                                                       \
 do {                                                                                           \
     close((conn)->fd);                                                                         \
-    FREE_IO_STEPS((conn)->steps);                                                              \
+    cleanup_steps((conn)->steps);                                                              \
     DL_DELETE(connections, conn);                                                              \
     free(conn);                                                                                \
 } while (0)
@@ -111,12 +113,12 @@ accept_peers_loop(struct connection **connections, time_t now)
             conn->steps = NULL;
             conn->next = NULL;
             conn->prev = NULL;
-            setup_read_io_step(&(conn->steps), 0, build_response);
+            setup_read_io_step(&(conn->steps), build_response);
 
             DL_APPEND(*connections, conn);
 
             peer_event.data.ptr = conn;
-            peer_event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
+            peer_event.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
             if (UNLIKELY(epoll_ctl(epollfd, EPOLL_CTL_ADD, peerfd, &peer_event) < 0)) {
                 warn("epoll_ctl()");
                 close(peerfd);
@@ -274,6 +276,13 @@ main(int argc, char *argv[])
                 if (conn->status == C_CLOSE) {
                     CLOSE_CONN(conn);
                 } else {
+                    if ((ev.events & EPOLLOUT) == 0) {
+                        ev.data.ptr = conn;
+                        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
+                        if (epoll_ctl(epollfd, EPOLL_CTL_MOD, conn->fd, &ev) < 0) {
+                            warn("epoll_ctl()");
+                        }
+                    }
                     conn->last_active = now;
                 }
             }
