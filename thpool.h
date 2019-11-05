@@ -24,7 +24,7 @@ struct thpool {
 
 struct thpool *thpool_create(int thread_count);
 void thpool_wait(struct thpool *pool);
-int thpool_add(struct thpool *pool, void (*func)(void *), void *args);
+void thpool_add(struct thpool *pool, void (*func)(void *), void *args);
 void thpool_destroy(struct thpool *pool);
 
 #endif

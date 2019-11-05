@@ -1,8 +1,6 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
-#include <stdio.h>
-#include <err.h>
 
 #include "thpool.h"
 #include "utils.h"
@@ -11,11 +9,11 @@
 #define MAX_THREADS 32
 
 
-static int
+static void
 thpool_free(struct thpool *pool)
 {
     if (!pool) {
-        return -1;
+        return;
     }
 
     if (pool->threads) {
@@ -25,7 +23,6 @@ thpool_free(struct thpool *pool)
     }
 
     free(pool);    
-    return 0;
 }
 
 static void *
@@ -78,11 +75,8 @@ thpool_destroy(struct thpool *pool)
     }
 
     pthread_mutex_lock(&pool->lock);
-
     pool->shutdown = 1;
-
     pthread_cond_broadcast(&pool->notify);
-
     pthread_mutex_unlock(&pool->lock);
 
     for (i = 0; i < pool->thread_count; i++) {
@@ -111,17 +105,9 @@ thpool_create(int thread_count)
 
     pool->threads = xmalloc(sizeof(pthread_t) * thread_count);
 
-    if (pthread_mutex_init(&pool->lock, NULL)) {
-        err(1, "pthread_mutex_init()");
-    }
-
-    if (pthread_cond_init(&pool->notify, NULL)) {
-        err(1, "pthread_cond_init()");
-    }
-
-    if (pthread_cond_init(&pool->all_idle, NULL)) {
-        err(1, "pthread_cond_init()");
-    }
+    pthread_mutex_init(&pool->lock, NULL);
+    pthread_cond_init(&pool->notify, NULL);
+    pthread_cond_init(&pool->all_idle, NULL);
 
     for (i = 0; i < thread_count; i++) {
         if (pthread_create(pool->threads + i, NULL, (void *(*)(void *))worker, pool)) {
@@ -146,7 +132,7 @@ thpool_wait(struct thpool *pool)
 }
 
 
-int
+void
 thpool_add(struct thpool *pool, void (*func)(void *), void *args)
 {
     struct task *t;
@@ -165,6 +151,4 @@ thpool_add(struct thpool *pool, void (*func)(void *), void *args)
     }
 
     pthread_mutex_unlock(&pool->lock);
-
-    return 0;
 }

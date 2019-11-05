@@ -15,6 +15,7 @@
 #include "utils.h"
 #include "log.h"
 #include "utlist.h"
+#include "thpool.h"
 
 #define MAXFDS 1024 * 4
 #define KEEP_ALIVE_TIMEOUT 5
@@ -36,6 +37,7 @@ do {                                                                            
 
 /* command line parameters */
 static int   port = 7887;
+static int   threads = 1;
 static int   keep_alive = 0;
 static int   change_root = 0;
 static int   quiet = 0;
@@ -118,7 +120,7 @@ accept_peers_loop(struct connection **connections, time_t now)
             DL_APPEND(*connections, conn);
 
             peer_event.data.ptr = conn;
-            peer_event.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
+            peer_event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
             if (UNLIKELY(epoll_ctl(epollfd, EPOLL_CTL_ADD, peerfd, &peer_event) < 0)) {
                 warn("epoll_ctl()");
                 close(peerfd);
@@ -182,6 +184,12 @@ parse_args(int argc, char *argv[])
         else if (!strcmp(argv[i], "--chroot")) {
             change_root = 1;
         }
+        else if (!strcmp(argv[i], "--threads")) {
+            if (++i >= argc) {
+                errx(1, "missing number after --threads");
+            }
+            threads = atoi(argv[i]);
+        }
         else {
             errx(1, "unknown argument `%s'", argv[i]);
         }
@@ -221,6 +229,7 @@ main(int argc, char *argv[])
         }
     }
 
+    struct thpool *pool = thpool_create(threads);
 
     log_setup(quiet);
 
@@ -242,7 +251,7 @@ main(int argc, char *argv[])
         now = time(NULL);
 
         DL_FOREACH_SAFE(connections, conn, tmp_conn) {
-            if (difftime(now, conn->last_active) > KEEP_ALIVE_TIMEOUT) {
+            if (conn->status == C_CLOSE || difftime(now, conn->last_active) > KEEP_ALIVE_TIMEOUT) {
                 CLOSE_CONN(conn);
             }
         }
@@ -252,6 +261,7 @@ main(int argc, char *argv[])
             warn("epoll_wait()");
             continue;
         }
+
 
         while (i) {
             ev = events[--i];
@@ -272,22 +282,15 @@ main(int argc, char *argv[])
             {
                 CLOSE_CONN(conn);
             } else {
-                process_connection(conn);
-                if (conn->status == C_CLOSE) {
-                    CLOSE_CONN(conn);
-                } else {
-                    if ((ev.events & EPOLLOUT) == 0) {
-                        ev.data.ptr = conn;
-                        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
-                        if (epoll_ctl(epollfd, EPOLL_CTL_MOD, conn->fd, &ev) < 0) {
-                            warn("epoll_ctl()");
-                        }
-                    }
-                    conn->last_active = now;
-                }
+                thpool_add(pool, (void (*)(void *))process_connection, conn);
+                conn->last_active = now;
             }
         }
+
+        thpool_wait(pool);
     }
+
+    thpool_destroy(pool);
 
     DL_FOREACH_SAFE(connections, conn, tmp_conn) {
         CLOSE_CONN(conn);
