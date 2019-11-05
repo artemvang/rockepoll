@@ -211,6 +211,7 @@ main(int argc, char *argv[])
     time_t               now;
     struct epoll_event   ev = {0};
     struct epoll_event   events[MAXFDS] = {0};
+    struct thpool       *pool;
     struct connection   *tmp_conn, *conn, *connections = NULL;
 
     signal(SIGINT, int_handler);
@@ -229,10 +230,7 @@ main(int argc, char *argv[])
         }
     }
 
-    struct thpool *pool = thpool_create(threads);
-
     log_setup(quiet);
-
     create_listen_socket();
 
     epollfd = epoll_create1(0);
@@ -245,6 +243,8 @@ main(int argc, char *argv[])
     if (epoll_ctl(epollfd, EPOLL_CTL_ADD, listenfd, &ev) < 0) {
         err(1, "epoll_ctl()");
     }
+
+    pool = thpool_create(threads);
 
     printf("listening on http://%s:%d/\n", listen_addr, port);
     while (loop) {

@@ -26,7 +26,7 @@ thpool_free(struct thpool *pool)
 }
 
 static void *
-worker(struct thpool *pool)
+thpool_worker(struct thpool *pool)
 {
     struct task *t;
 
@@ -110,7 +110,7 @@ thpool_create(int thread_count)
     pthread_cond_init(&pool->all_idle, NULL);
 
     for (i = 0; i < thread_count; i++) {
-        if (pthread_create(pool->threads + i, NULL, (void *(*)(void *))worker, pool)) {
+        if (pthread_create(pool->threads + i, NULL, (void *(*)(void *))thpool_worker, pool)) {
             thpool_destroy(pool);
             return NULL;
         }
