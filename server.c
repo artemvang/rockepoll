@@ -205,6 +205,7 @@ main(int argc, char *argv[])
     struct epoll_event   events[MAXFDS] = {0};
     struct connection   *tmp_conn, *conn, *connections = NULL;
 
+    signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, int_handler);
 
     parse_args(argc, argv);
