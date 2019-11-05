@@ -214,6 +214,7 @@ main(int argc, char *argv[])
     struct thpool       *pool;
     struct connection   *tmp_conn, *conn, *connections = NULL;
 
+    signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, int_handler);
 
     parse_args(argc, argv);
