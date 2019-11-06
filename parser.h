@@ -1,6 +1,6 @@
 
-#ifndef HTTP_PARSER_H
-#define HTTP_PARSER_H
+#ifndef PARSER_H
+#define PARSER_H
 
 #define MAPPING_ENTRY(enm, str)                                                                 \
     [enm] = { .name=str, .size=sizeof(str) - 1 }

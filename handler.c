@@ -6,11 +6,11 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 
-#include "../io.h"
-#include "../utils.h"
-#include "../log.h"
-#include "handler.h"
+#include "io.h"
+#include "log.h"
+#include "utils.h"
 #include "parser.h"
+#include "handler.h"
 
 
 #define ETAG_SIZE 64

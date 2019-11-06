@@ -1,6 +1,6 @@
 #include <string.h>
 
-#include "../utils.h"
+#include "utils.h"
 #include "parser.h"
 
 
