@@ -7,17 +7,17 @@
 #include <netinet/tcp.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <pthread.h>
 #include <time.h>
 #include <err.h>
 
 #include "io.h"
-#include "http/handler.h"
-#include "utils.h"
 #include "log.h"
+#include "utils.h"
 #include "utlist.h"
-#include "thpool.h"
+#include "handler.h"
 
-#define MAXFDS 1024 * 4
+#define MAXFDS 128
 #define KEEP_ALIVE_TIMEOUT 5
 
 #if defined(__GNUC__) || defined(__INTEL_COMPILER)
@@ -37,21 +37,20 @@ do {                                                                            
 
 /* command line parameters */
 static int   port = 7887;
-static int   threads = 1;
+static int   threads_count = 1;
 static int   keep_alive = 0;
 static int   change_root = 0;
 static int   quiet = 0;
 static char *listen_addr = "127.0.0.1";
 static char *wwwroot = ".";
 
-static int listenfd, epollfd;
-static int loop = 1;
+static volatile int loop = 1;
 
 
-static void
+static int
 create_listen_socket()
 {
-    int    opt;
+    int    opt, listenfd;
     struct sockaddr_in addr;
 
     listenfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
@@ -60,8 +59,8 @@ create_listen_socket()
     }
 
     opt = 1;
-    if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-        err(1, "setsockopt(), SOL_SOCKET, SO_REUSEADDR");
+    if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
+        err(1, "setsockopt(), SOL_SOCKET, SO_REUSEPORT");
     }
 
     memset(&addr, 0, sizeof(addr));
@@ -76,11 +75,13 @@ create_listen_socket()
     if (listen(listenfd, -1) < 0) {
         err(1, "listen()");
     }
+
+    return listenfd;
 }
 
 
 static void
-accept_peers_loop(struct connection **connections, time_t now)
+accept_peers_loop(struct connection **connections, int listenfd, int epollfd, time_t now)
 {
     int                  peerfd, opt;
     struct connection   *conn;
@@ -188,7 +189,7 @@ parse_args(int argc, char *argv[])
             if (++i >= argc) {
                 errx(1, "missing number after --threads");
             }
-            threads = atoi(argv[i]);
+            threads_count = atoi(argv[i]);
         }
         else {
             errx(1, "unknown argument `%s'", argv[i]);
@@ -204,15 +205,85 @@ int_handler(int dummy UNUSED)
 }
 
 
-int
-main(int argc, char *argv[])
+void *
+run_server()
 {
-    int                  i;
+    int                  i, epollfd, listenfd;
     time_t               now;
     struct epoll_event   ev = {0};
     struct epoll_event   events[MAXFDS] = {0};
-    struct thpool       *pool;
     struct connection   *tmp_conn, *conn, *connections = NULL;
+
+    listenfd = create_listen_socket();
+
+    epollfd = epoll_create1(0);
+    if (epollfd < 0) {
+        err(1, "epoll_create1()");
+    }
+
+    ev.data.ptr = &listenfd;
+    ev.events = EPOLLIN | EPOLLET;
+    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, listenfd, &ev) < 0) {
+        err(1, "epoll_ctl()");
+    }
+
+    while (loop) {
+        now = time(NULL);
+
+        DL_FOREACH_SAFE(connections, conn, tmp_conn) {
+            if (conn->status == C_CLOSE || difftime(now, conn->last_active) > KEEP_ALIVE_TIMEOUT) {
+                CLOSE_CONN(conn);
+            }
+        }
+
+        i = epoll_wait(epollfd, events, MAXFDS, 10);
+        if (UNLIKELY(i < 0)) {
+            warn("epoll_wait()");
+            continue;
+        }
+
+
+        while (i) {
+            ev = events[--i];
+            conn = ev.data.ptr;
+
+            /*
+                In this case conn does not reference to connection's struct,
+                but references to address of listenfd variable. It works because
+                connection's struct first element is fd, so dereferencing gives
+                in both cases fd variable
+            */
+            if (conn->fd  == listenfd) {
+                accept_peers_loop(&connections, listenfd, epollfd, now);
+            } else if (
+                ev.events & EPOLLHUP ||
+                ev.events & EPOLLERR ||
+                ev.events & EPOLLRDHUP)
+            {
+                CLOSE_CONN(conn);
+            } else {
+                process_connection(conn);
+                conn->last_active = now;
+            }
+        }
+    }
+
+    DL_FOREACH_SAFE(connections, conn, tmp_conn) {
+        CLOSE_CONN(conn);
+    }
+
+    close(listenfd);
+    close(epollfd);
+
+    return NULL;
+}
+
+
+int
+main(int argc, char *argv[])
+{
+    int i;
+    pthread_t *threads;
 
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, int_handler);
@@ -232,73 +303,19 @@ main(int argc, char *argv[])
     }
 
     log_setup(quiet);
-    create_listen_socket();
 
-    epollfd = epoll_create1(0);
-    if (epollfd < 0) {
-        err(1, "epoll_create1()");
-    }
-
-    ev.data.ptr = &listenfd;
-    ev.events = EPOLLIN | EPOLLET;
-    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, listenfd, &ev) < 0) {
-        err(1, "epoll_ctl()");
-    }
-
-    pool = thpool_create(threads);
+    threads = xmalloc(sizeof(pthread_t) * threads_count);
 
     printf("listening on http://%s:%d/\n", listen_addr, port);
-    while (loop) {
-        now = time(NULL);
-
-        DL_FOREACH_SAFE(connections, conn, tmp_conn) {
-            if (conn->status == C_CLOSE || difftime(now, conn->last_active) > KEEP_ALIVE_TIMEOUT) {
-                CLOSE_CONN(conn);
-            }
-        }
-
-        i = epoll_wait(epollfd, events, MAXFDS, KEEP_ALIVE_TIMEOUT * 1000);
-        if (UNLIKELY(i < 0)) {
-            warn("epoll_wait()");
-            continue;
-        }
-
-
-        while (i) {
-            ev = events[--i];
-            conn = ev.data.ptr;
-
-            /*
-                In this case conn does not reference to connection's struct,
-                but references to address of listenfd variable. It works because
-                connection's struct first element is fd, so dereferencing gives
-                in both cases fd variable
-            */
-            if (conn->fd  == listenfd) {
-                accept_peers_loop(&connections, now);
-            } else if (
-                ev.events & EPOLLHUP ||
-                ev.events & EPOLLERR ||
-                ev.events & EPOLLRDHUP)
-            {
-                CLOSE_CONN(conn);
-            } else {
-                thpool_add(pool, (void (*)(void *))process_connection, conn);
-                conn->last_active = now;
-            }
-        }
-
-        thpool_wait(pool);
+    for (i = 0; i < threads_count; i++) {
+        pthread_create(threads + i, NULL, run_server, NULL);
     }
 
-    thpool_destroy(pool);
-
-    DL_FOREACH_SAFE(connections, conn, tmp_conn) {
-        CLOSE_CONN(conn);
+    for (i = 0; i < threads_count; i++) {
+        pthread_join(threads[i], NULL); 
     }
 
-    close(epollfd);
-    close(listenfd);
+    free(threads);
 
     return 0;
 }
