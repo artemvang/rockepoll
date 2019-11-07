@@ -39,7 +39,6 @@ do {                                                                            
 static int   port = 7887;
 static int   threads_count = 1;
 static int   keep_alive = 0;
-static int   change_root = 0;
 static int   quiet = 0;
 static char *listen_addr = "127.0.0.1";
 static char *wwwroot = ".";
@@ -135,7 +134,7 @@ accept_peers_loop(struct connection **connections, int listenfd, int epollfd, ti
 static void
 usage(const char *argv0)
 {
-    printf("usage: %s path [--addr addr] [--port port] [--quiet] [--keep-alive] [--chroot]\n", argv0);   
+    printf("usage: %s path [--addr addr] [--port port] [--quiet] [--keep-alive] [--threads N]\n", argv0);   
 }
 
 
@@ -181,9 +180,6 @@ parse_args(int argc, char *argv[])
         }
         else if (!strcmp(argv[i], "--keep-alive")) {
             keep_alive = 1;
-        }
-        else if (!strcmp(argv[i], "--chroot")) {
-            change_root = 1;
         }
         else if (!strcmp(argv[i], "--threads")) {
             if (++i >= argc) {
@@ -290,16 +286,9 @@ main(int argc, char *argv[])
 
     parse_args(argc, argv);
 
-    if (change_root) {
-        i = chroot(wwwroot);
-        if (i < 0) {
-            err(1, "chroot(), `%s'", wwwroot);
-        }
-    } else {
-        i = chdir(wwwroot);
-        if (i < 0) {
-            err(1, "chdir(), `%s'", wwwroot);
-        }
+    i = chdir(wwwroot);
+    if (i < 0) {
+        err(1, "chdir(), `%s'", wwwroot);
     }
 
     log_setup(quiet);
