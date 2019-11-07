@@ -26,7 +26,7 @@
 # define UNUSED
 #endif
 
-#define CLOSE_CONN(conn)                                                                       \
+#define CLOSE_CONN(connections, conn)                                                          \
 do {                                                                                           \
     close((conn)->fd);                                                                         \
     cleanup_steps((conn)->steps);                                                              \
@@ -115,7 +115,7 @@ accept_peers_loop(struct connection **connections, int listenfd, int epollfd, ti
             conn->steps = NULL;
             conn->next = NULL;
             conn->prev = NULL;
-            setup_read_io_step(&(conn->steps), build_response);
+            setup_read_io_step(&conn->steps, build_response);
 
             DL_APPEND(*connections, conn);
 
@@ -123,8 +123,7 @@ accept_peers_loop(struct connection **connections, int listenfd, int epollfd, ti
             peer_event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
             if (UNLIKELY(epoll_ctl(epollfd, EPOLL_CTL_ADD, peerfd, &peer_event) < 0)) {
                 warn("epoll_ctl()");
-                close(peerfd);
-                continue;
+                CLOSE_CONN(*connections, conn);
             }
         }
     }
@@ -228,7 +227,7 @@ run_server()
 
         DL_FOREACH_SAFE(connections, conn, tmp_conn) {
             if (conn->status == C_CLOSE || difftime(now, conn->last_active) > KEEP_ALIVE_TIMEOUT) {
-                CLOSE_CONN(conn);
+                CLOSE_CONN(connections, conn);
             }
         }
 
@@ -256,7 +255,7 @@ run_server()
                 ev.events & EPOLLERR ||
                 ev.events & EPOLLRDHUP)
             {
-                CLOSE_CONN(conn);
+                CLOSE_CONN(connections, conn);
             } else {
                 process_connection(conn);
                 conn->last_active = now;
@@ -265,7 +264,7 @@ run_server()
     }
 
     DL_FOREACH_SAFE(connections, conn, tmp_conn) {
-        CLOSE_CONN(conn);
+        CLOSE_CONN(connections, conn);
     }
 
     close(listenfd);
@@ -285,17 +284,16 @@ main(int argc, char *argv[])
     signal(SIGINT, int_handler);
 
     parse_args(argc, argv);
+    log_setup(quiet);
 
-    i = chdir(wwwroot);
-    if (i < 0) {
+    if (chdir(wwwroot) < 0) {
         err(1, "chdir(), `%s'", wwwroot);
     }
 
-    log_setup(quiet);
+    printf("listening on http://%s:%d/\n", listen_addr, port);
 
     threads = xmalloc(sizeof(pthread_t) * threads_count);
 
-    printf("listening on http://%s:%d/\n", listen_addr, port);
     for (i = 0; i < threads_count; i++) {
         pthread_create(threads + i, NULL, run_server, NULL);
     }
