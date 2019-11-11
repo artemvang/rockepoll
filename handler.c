@@ -6,11 +6,11 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 
-#include "../io.h"
-#include "../utils.h"
-#include "../log.h"
-#include "handler.h"
+#include "io.h"
+#include "log.h"
+#include "utils.h"
 #include "parser.h"
+#include "handler.h"
 
 
 #define ETAG_SIZE 64
@@ -105,7 +105,7 @@ log_new_connection(const struct connection *conn,
     char *user_agent = "-";
     char *request_line = "-";
 
-    if (LIKELY(status != S_BAD_REQUEST)) {
+    if (status != S_BAD_REQUEST) {
         if (req->headers[H_USER_AGENT]) {
             user_agent = req->headers[H_USER_AGENT];
         }
@@ -124,7 +124,7 @@ log_new_connection(const struct connection *conn,
             conn->ip, timestamp, request_line,
             status, content_lenght,user_agent);
 
-    if (LIKELY(status != S_BAD_REQUEST)) {
+    if (status != S_BAD_REQUEST) {
         free(request_line);
     }
 }
@@ -166,7 +166,7 @@ gather_file_meta(const char *target, struct file_meta *file_meta)
     }
 
 
-    if (UNLIKELY(stat(target, &st_buf) < 0)) {
+    if (stat(target, &st_buf) < 0) {
         return F_INTERNAL_ERROR;
     }
 
@@ -235,7 +235,7 @@ build_response(struct connection *conn)
     size_t lower, upper, content_length, size;
 
     st = parse_request(((struct read_meta *)conn->steps->meta)->data, &req);
-    if (UNLIKELY(st)) {
+    if (st) {
         build_http_status_step(S_BAD_REQUEST, conn, &req);
         return C_RUN;
     }
@@ -282,14 +282,14 @@ build_response(struct connection *conn)
     if (req.headers[H_RANGE]) {
         data = req.headers[H_RANGE];
 
-        if (UNLIKELY(strncmp(data, "bytes=", sizeof("bytes=") - 1))) {
+        if (strncmp(data, "bytes=", sizeof("bytes=") - 1)) {
             build_http_status_step(S_BAD_REQUEST, conn, &req);
             return C_RUN;
         }
 
         data += sizeof("bytes=") - 1;
 
-        if (UNLIKELY(!(p = strchr(data, '-')))) {
+        if (!(p = strchr(data, '-'))) {
             build_http_status_step(S_BAD_REQUEST, conn, &req);
             return C_RUN;
         }
@@ -304,7 +304,7 @@ build_response(struct connection *conn)
             upper = strtoull(p, NULL, 10);
         }
 
-        if (UNLIKELY(lower > upper)) {
+        if (lower > upper) {
             build_http_status_step(S_RANGE_NOT_SATISFIABLE, conn, &req);
             return C_RUN;
         }

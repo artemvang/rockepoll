@@ -1,7 +1,7 @@
 include config.mk
 
 
-SRC = server.c utils.c io.c log.c http/parser.c http/handler.c
+SRC = server.c utils.c io.c log.c parser.c handler.c
 OBJ = ${SRC:.c=.o}
 
 
@@ -24,7 +24,7 @@ ${OBJ}: config.mk
 
 
 server: ${OBJ}
-	${CC} -o $@ ${OBJ}
+	${CC} -pthread -o $@ ${OBJ}
 
 
 clean:

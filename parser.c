@@ -1,11 +1,11 @@
 #include <string.h>
 
-#include "../utils.h"
+#include "utils.h"
 #include "parser.h"
 
 
 static ALWAYS_INLINE char
-decode_hex_digit(int ch)
+decode_hex(int ch)
 {
     static const char hex_digit_tbl[256] = {
         ['0'] = 0,  ['1'] = 1,  ['2'] = 2,  ['3'] = 3,  ['4'] = 4,  ['5'] = 5,
@@ -26,7 +26,7 @@ decode_target(char *target)
     for (decoded = ch = target; *ch; ch++) {
         switch (*ch) {
         case '%':
-            *decoded++ = decode_hex_digit(ch[1]) << 4 | decode_hex_digit(ch[2]);
+            *decoded++ = decode_hex(ch[1]) << 4 | decode_hex(ch[2]);
             ch += 2;
             break;
         case '+':
@@ -56,17 +56,17 @@ parse_request(char *data, struct http_request *req)
         }
     }
 
-    if (UNLIKELY(i == HTTP_METHODS_COUNT)) {
+    if (i == HTTP_METHODS_COUNT) {
         return -1;
     }
 
-    if (UNLIKELY(*p++ != ' ')) {
+    if (*p++ != ' ') {
         return -1;
     }
 
     /* skip / */
     p++;
-    if (UNLIKELY(!(q = strchr(p, ' ')))) {
+    if (!(q = strchr(p, ' '))) {
         return -1;
     }
     *q++ = '\0';
@@ -77,7 +77,7 @@ parse_request(char *data, struct http_request *req)
     p = q;
 
     /* HTTP-VERSION */
-    if (UNLIKELY(strncmp(p, "HTTP/", sizeof("HTTP/") - 1))) {
+    if (strncmp(p, "HTTP/", sizeof("HTTP/") - 1)) {
         return -1;
     }
 
@@ -121,7 +121,7 @@ parse_request(char *data, struct http_request *req)
     }
 
     /* check terminator */
-    if (UNLIKELY(strncmp(p, "\r\n", sizeof("\r\n") - 1))) {
+    if (strncmp(p, "\r\n", sizeof("\r\n") - 1)) {
         return -1;
     }
 
@@ -136,7 +136,7 @@ parse_request(char *data, struct http_request *req)
         }
 
         if (i == HEADERS_COUNT) {
-            if (UNLIKELY(!(q = strchr(p, '\r')))) {
+            if (!(q = strchr(p, '\r'))) {
                 return -1;
             }
 
@@ -145,7 +145,7 @@ parse_request(char *data, struct http_request *req)
         }
 
         /* a single colon must follow the field name */
-        if (UNLIKELY(*p != ':')) {
+        if (*p != ':') {
             return -1;
         }
 
@@ -153,7 +153,7 @@ parse_request(char *data, struct http_request *req)
         for (++p; *p == ' ' || *p == '\t'; p++) ;
 
         /* extract field content */
-        if (UNLIKELY(!(q = strchr(p, '\r')))) {
+        if (!(q = strchr(p, '\r'))) {
             return -1;
         }
 
