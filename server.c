@@ -19,6 +19,7 @@
 
 
 #define MAX_THREADS 32
+#define EPOLL_WAIT_TIMEOUT 10
 #define MAXFDS 128
 #define KEEP_ALIVE_TIMEOUT 5
 
@@ -132,7 +133,7 @@ run_worker()
             }
         }
 
-        i = epoll_wait(epollfd, events, MAXFDS, 10);
+        i = epoll_wait(epollfd, events, MAXFDS, EPOLL_WAIT_TIMEOUT);
         if (i < 0) {
             warn("epoll_wait()");
             continue;
@@ -180,16 +181,20 @@ run_server()
     int i;
     pthread_t *threads;
 
-    threads = xmalloc(sizeof(pthread_t) * threads_count);
-    for (i = 0; i < threads_count; i++) {
-        pthread_create(threads + i, NULL, run_worker, NULL);
-    }
+    if (threads_count == 1) {
+        run_worker();
+    } else {
+        threads = xmalloc(sizeof(pthread_t) * threads_count);
+        for (i = 0; i < threads_count; i++) {
+            pthread_create(threads + i, NULL, run_worker, NULL);
+        }
 
-    for (i = 0; i < threads_count; i++) {
-        pthread_join(threads[i], NULL); 
-    }
+        for (i = 0; i < threads_count; i++) {
+            pthread_join(threads[i], NULL); 
+        }
 
-    free(threads);
+        free(threads);
+    }
 }
 
 
