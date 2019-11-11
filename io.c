@@ -13,14 +13,14 @@
 #define SENDFILE_CHUNK_SIZE 1024 * 512
 
 
-#define BUILD_IO_STEP(steps, meta, step_type, handler)                                         \
-do {                                                                                           \
-    struct io_step *__step = xmalloc(sizeof(struct io_step));                                  \
-    __step->meta = meta;                                                                       \
-    __step->type = step_type;                                                                  \
-    __step->handler = handler;                                                                 \
-    __step->next = NULL;                                                                       \
-    LL_APPEND(*steps, __step);                                                                 \
+#define BUILD_IO_STEP(steps, meta, step_type, handler)                        \
+do {                                                                          \
+    struct io_step *__step = xmalloc(sizeof(struct io_step));                 \
+    __step->meta = meta;                                                      \
+    __step->type = step_type;                                                 \
+    __step->handler = handler;                                                \
+    __step->next = NULL;                                                      \
+    LL_APPEND(*steps, __step);                                                \
 } while(0);
 
 
@@ -34,7 +34,7 @@ make_sendfile_step(int fd, struct sendfile_meta *meta)
         size = MIN(SENDFILE_CHUNK_SIZE, meta->size);
         sent_len = sendfile(fd, meta->fd, &meta->start_offset, size);
         if (sent_len < 0) {
-            if (LIKELY(errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return IO_AGAIN;
             }
 
@@ -57,7 +57,7 @@ make_write_step(int fd, struct send_meta *meta)
     do {
         write_size = send(fd, meta->data + meta->offset, meta->size, flags);
         if (write_size < 0) {
-            if (LIKELY(errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return IO_AGAIN;
             }
 
@@ -74,13 +74,14 @@ make_write_step(int fd, struct send_meta *meta)
 static enum io_step_status
 make_read_step(int fd, struct read_meta *meta)
 {
-    ssize_t read_size;
+    ssize_t read_size, size;
 
     do {
-        read_size = read(fd, meta->data + meta->size, MIN(REQ_BUF_SIZE, MAX_REQ_SIZE - meta->size));
+        size = MIN(REQ_BUF_SIZE, MAX_REQ_SIZE - meta->size);
+        read_size = read(fd, meta->data + meta->size, size);
 
         if (read_size < 1) {
-            if (LIKELY(read_size < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
+            if (read_size < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
                 return IO_AGAIN;
             }
 
@@ -90,7 +91,7 @@ make_read_step(int fd, struct read_meta *meta)
         meta->size += read_size;
     } while (read_size == REQ_BUF_SIZE && meta->size < MAX_REQ_SIZE);
 
-    if (UNLIKELY(!meta->size || meta->size == MAX_REQ_SIZE)) {
+    if (!meta->size || meta->size == MAX_REQ_SIZE) {
         return IO_ERROR;
     }
     meta->data[meta->size] = '\0';
@@ -211,7 +212,9 @@ process_connection(struct connection *conn)
 
         switch(s) {
         case IO_OK:
-            if (*steps_head->handler && (*steps_head->handler)(conn) == C_CLOSE) {
+            if (*steps_head->handler &&
+                (*steps_head->handler)(conn) == C_CLOSE)
+            {
                 run = 0;
             }
 
