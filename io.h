@@ -4,8 +4,7 @@
 
 #include <time.h>
 
-#define MAX_REQ_SIZE 4096
-#define MAX_REQ_SIZE 4096
+#define MAX_REQ_SIZE 1024 * 8
 
 
 enum io_step_status {IO_OK, IO_AGAIN, IO_ERROR};
