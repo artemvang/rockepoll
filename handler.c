@@ -40,7 +40,7 @@ enum http_status {
 enum file_status {F_EXISTS, F_FORBIDDEN, F_NOT_FOUND, F_INTERNAL_ERROR};
 
 struct file_meta {
-    int fd;
+    int fd, gz;
     char *mime;
     size_t size;
     char etag[ETAG_SIZE];
@@ -155,18 +155,58 @@ get_url_mimetype(const char *url)
 }
 
 
-static enum file_status
-gather_file_meta(const char *target, struct file_meta *file_meta)
-{
-    struct stat st_buf;
+static int
+is_accept_gzip(const char *header)
+{   
+    const char *q, *p = header;
 
+    while (p) {
+        q = strchrnul(p, ',');
+        if (!strncmp(p, "gzip", sizeof("gzip") - 1)) {
+            return 1;
+        }
+        if (*q == '\0') {
+            break;
+        }
 
-    if ((file_meta->fd = open(target, O_LARGEFILE | O_RDONLY | O_NONBLOCK)) < 0) {
-        return (errno == EACCES) ? F_FORBIDDEN : F_NOT_FOUND;
+        p = q + 1;
+        for (; *p == ' ' || *p == '\t'; p++) ;
     }
 
+    return 0;
+}
 
-    if (stat(target, &st_buf) < 0) {
+
+static enum file_status
+gather_file_meta(const char *target, int try_gz, struct file_meta *file_meta)
+{
+    int fd;
+    size_t target_len;
+    struct stat st_buf;
+    static char target_enc[MAX_TARGET_SIZE + 4];
+
+    target_len = strlen(target);
+
+    file_meta->gz = 0;
+    if (try_gz) {
+        strcpy(target_enc, target);
+        memcpy(target_enc + target_len, ".gz", sizeof(".gz"));
+
+        fd = open(target_enc, O_LARGEFILE | O_RDONLY | O_NONBLOCK);
+        if (fd > 0) {
+            file_meta->gz = 1;
+        }
+
+    } else {
+        fd = open(target, O_LARGEFILE | O_RDONLY | O_NONBLOCK);
+        if (fd < 0) {
+            return (errno == EACCES) ? F_FORBIDDEN : F_NOT_FOUND;
+        }
+    }
+
+    file_meta->fd = fd;
+
+    if (fstat(fd, &st_buf) < 0) {
         return F_INTERNAL_ERROR;
     }
 
@@ -198,7 +238,8 @@ close_on_keep_alive(struct connection *conn)
 
 
 static void
-build_http_status_step(enum http_status st, struct connection *conn, const struct http_request *req)
+build_http_status_step(enum http_status st, struct connection *conn,
+                       const struct http_request *req)
 {
     char *data;
     size_t content_length, size;
@@ -225,10 +266,17 @@ build_http_status_step(enum http_status st, struct connection *conn, const struc
 }
 
 
+void
+init_handler(const char *root_dir)
+{
+    xchdir(root_dir);
+}
+
+
 enum conn_status
 build_response(struct connection *conn)
 {
-    int st;
+    int st, try_gz;
     char *data, *p;
     struct http_request req = {0};
     struct file_meta file_meta = {0};
@@ -253,7 +301,8 @@ build_response(struct connection *conn)
         req.target = INDEX_PAGE;
     }
 
-    switch(gather_file_meta(req.target, &file_meta)) {
+    try_gz = is_accept_gzip(req.headers[H_ACCEPT_ENCODING]);
+    switch(gather_file_meta(req.target, try_gz, &file_meta)) {
     case F_FORBIDDEN:
         build_http_status_step(S_FORBIDDEN, conn, &req);
         return C_RUN;
@@ -326,7 +375,13 @@ build_response(struct connection *conn)
     size += sprintf(data + size, "ETag: \"%s\"\r\n", file_meta.etag);
 
     if (st == S_PARTIAL_CONTENT) {
-        size += sprintf(data + size, "Content-Range: bytes %lu-%lu/%lu\r\n", lower, upper, file_meta.size);
+        size += sprintf(data + size,
+                        "Content-Range: bytes %lu-%lu/%lu\r\n",
+                        lower, upper, file_meta.size);
+    }
+
+    if (file_meta.gz) {
+        size += sprintf(data + size, "Content-Encoding: gzip\r\n");
     }
 
     if (conn->keep_alive) {
@@ -335,9 +390,10 @@ build_response(struct connection *conn)
         size += sprintf(data + size, "Connection: close\r\n\r\n");
     }
 
-    setup_write_io_step(&(conn->steps), data, 1, size, NULL);
-    setup_sendfile_io_step(&(conn->steps),
-                           file_meta.fd, lower, upper + 1, content_length, close_on_keep_alive);
+    setup_write_io_step(&conn->steps, data, 1, size, NULL);
+    setup_sendfile_io_step(&conn->steps,
+                           file_meta.fd, lower, upper + 1, content_length,
+                           close_on_keep_alive);
 
     log_new_connection(conn, &req, st, content_length);
 

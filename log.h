@@ -14,7 +14,7 @@
 #endif
 
 
-void log_setup(int quiet_mode);
+void init_logger(int quiet_mode);
 void log_log(const char *format, ...) __printflike(1, 2);
 
 

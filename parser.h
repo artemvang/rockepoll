@@ -2,6 +2,9 @@
 #ifndef PARSER_H
 #define PARSER_H
 
+
+#define MAX_TARGET_SIZE 1024 * 4
+
 #define MAPPING_ENTRY(enm, str)                                               \
     [enm] = { .name=str, .size=sizeof(str) - 1 }
 
@@ -16,6 +19,7 @@ enum http_header {
     H_IF_MATCH,
     H_CONNECTION,
     H_USER_AGENT,
+    H_ACCEPT_ENCODING,
     HEADERS_COUNT,
 };
 
@@ -34,7 +38,8 @@ ENUM_MAPPING(http_headers) {
     MAPPING_ENTRY(H_RANGE,      "Range"),
     MAPPING_ENTRY(H_CONNECTION, "Connection"),
     MAPPING_ENTRY(H_IF_MATCH,   "If-Match"),
-    MAPPING_ENTRY(H_USER_AGENT, "User-Agent")
+    MAPPING_ENTRY(H_USER_AGENT, "User-Agent"),
+    MAPPING_ENTRY(H_ACCEPT_ENCODING, "Accept-Encoding")
 };
 
 

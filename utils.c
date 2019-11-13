@@ -2,6 +2,7 @@
 #include <netinet/tcp.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <unistd.h>
 #include <err.h>
 
 #include "utils.h"
@@ -28,6 +29,15 @@ xrealloc(void *original, const size_t size)
         err(1, "realloc(), can't reallocate %zu bytes", size);
     }
     return ptr;
+}
+
+
+inline void
+xchdir(const char *dir)
+{
+    if (chdir(dir) < 0) {
+        err(1, "chdir(), `%s'", dir);
+    }
 }
 
 

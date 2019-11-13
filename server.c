@@ -44,7 +44,7 @@ static int   threads_count = 1;
 static int   keep_alive = 0;
 static int   quiet = 0;
 static char *listen_addr = "127.0.0.1";
-static char *wwwroot = ".";
+static char *root_dir = ".";
 
 static volatile int loop = 1;
 
@@ -233,12 +233,12 @@ parse_args(int argc, char *argv[])
         port = 80;
     }
 
-    wwwroot = argv[1];
+    root_dir = argv[1];
     /* Strip ending slash */
-    len = strlen(wwwroot);
+    len = strlen(root_dir);
     if (len > 1) {
-        if (wwwroot[len - 1] == '/') {
-            wwwroot[len - 1] = '\0';
+        if (root_dir[len - 1] == '/') {
+            root_dir[len - 1] = '\0';
         }
     }
 
@@ -291,10 +291,9 @@ main(int argc, char *argv[])
     signal(SIGINT, sigint_handler);
 
     parse_args(argc, argv);
-    log_setup(quiet);
-    if (chdir(wwwroot) < 0) {
-        err(1, "chdir(), `%s'", wwwroot);
-    }
+
+    init_logger(quiet);
+    init_handler(root_dir);
 
     printf("listening on http://%s:%d/\n", listen_addr, port);
     run_server();

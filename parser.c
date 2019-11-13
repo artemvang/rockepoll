@@ -69,6 +69,10 @@ parse_request(char *data, struct http_request *req)
     if (!(q = strchr(p, ' '))) {
         return -1;
     }
+    if (q - p >= MAX_TARGET_SIZE) {
+        return -1;
+    }
+
     *q++ = '\0';
 
     req->target = p;

@@ -12,7 +12,7 @@ static int quiet = 0;
 
 
 void
-log_setup(int quiet_mode)
+init_logger(int quiet_mode)
 {
     quiet = quiet_mode;
 }
