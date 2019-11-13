@@ -18,10 +18,10 @@
 #include "handler.h"
 
 
-#define MAX_THREADS 32
-#define EPOLL_WAIT_TIMEOUT 10
 #define MAXFDS 128
-#define KEEP_ALIVE_TIMEOUT 5
+#define MAX_THREADS 32
+#define KEEP_ALIVE_TIMEOUT 5 /* in seconds */
+#define EPOLL_WAIT_TIMEOUT 10 /* in milliseconds */
 
 #if defined(__GNUC__) || defined(__INTEL_COMPILER)
 # define UNUSED __attribute__((__unused__))
