@@ -180,7 +180,7 @@ is_accept_gzip(const char *header)
 static enum file_status
 gather_file_meta(const char *target, int try_gz, struct file_meta *file_meta)
 {
-    int fd;
+    int fd = -1;
     size_t target_len;
     struct stat st_buf;
     static char target_enc[MAX_TARGET_SIZE + 4];
@@ -196,8 +196,9 @@ gather_file_meta(const char *target, int try_gz, struct file_meta *file_meta)
         if (fd > 0) {
             file_meta->gz = 1;
         }
+    }
 
-    } else {
+    if (fd < 0) {
         fd = open(target, O_LARGEFILE | O_RDONLY | O_NONBLOCK);
         if (fd < 0) {
             return (errno == EACCES) ? F_FORBIDDEN : F_NOT_FOUND;
