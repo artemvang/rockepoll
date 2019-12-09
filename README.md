@@ -1,2 +1,2 @@
 # rockepoll
-Lightweight and customizable asynchronous server
+Lightweight asynchronous server
