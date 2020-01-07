@@ -7,7 +7,6 @@
 #include <netinet/tcp.h>
 #include <unistd.h>
 #include <stdio.h>
-#include <pthread.h>
 #include <time.h>
 #include <err.h>
 
@@ -21,7 +20,7 @@
 #define MAXFDS 128
 #define MAX_THREADS 32
 #define KEEP_ALIVE_TIMEOUT 5 /* in seconds */
-#define EPOLL_WAIT_TIMEOUT 10 /* in milliseconds */
+#define EPOLL_WAIT_TIMEOUT (KEEP_ALIVE_TIMEOUT * 1000) /* in milliseconds */
 
 #if defined(__GNUC__) || defined(__INTEL_COMPILER)
 # define UNUSED __attribute__((__unused__))
@@ -40,7 +39,6 @@ do {                                                                          \
 
 /* command line parameters */
 static int   port = 7887;
-static int   threads_count = 1;
 static int   keep_alive = 0;
 static int   quiet = 0;
 static char *listen_addr = "127.0.0.1";
@@ -101,8 +99,8 @@ accept_peers_loop(struct connection **connections,
 }
 
 
-static void *
-run_worker()
+static void
+run_server()
 {
     int                  i, epollfd, listenfd;
     time_t               now;
@@ -170,31 +168,6 @@ run_worker()
 
     close(listenfd);
     close(epollfd);
-
-    return NULL;
-}
-
-
-static void
-run_server()
-{
-    int i;
-    pthread_t *threads;
-
-    if (threads_count == 1) {
-        run_worker();
-    } else {
-        threads = xmalloc(sizeof(pthread_t) * threads_count);
-        for (i = 0; i < threads_count; i++) {
-            pthread_create(threads + i, NULL, run_worker, NULL);
-        }
-
-        for (i = 0; i < threads_count; i++) {
-            pthread_join(threads[i], NULL); 
-        }
-
-        free(threads);
-    }
 }
 
 
@@ -212,8 +185,7 @@ usage(const char *argv0)
            "[--addr addr] "
            "[--port port] "
            "[--quiet] "
-           "[--keep-alive] "
-           "[--threads N]\n", argv0);
+           "[--keep-alive]\n", argv0);
 }
 
 
@@ -263,19 +235,6 @@ parse_args(int argc, char *argv[])
         }
         else if (!strcmp(argv[i], "--keep-alive")) {
             keep_alive = 1;
-        }
-        else if (!strcmp(argv[i], "--threads")) {
-            if (++i >= argc) {
-                errx(1, "missing number after --threads");
-            }
-            threads_count = strtol(argv[i], &next, 10);
-            if (next == argv[i] || *next != '\0') {
-                errx(1, "invalid argument `%s'", argv[i]);
-            }
-            else if (threads_count >= MAX_THREADS) {
-                errx(1, "too large amount of threads (%d >= %d)",
-                     threads_count, MAX_THREADS);
-            }
         }
         else {
             errx(1, "unknown argument `%s'", argv[i]);

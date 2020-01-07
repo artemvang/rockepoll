@@ -24,7 +24,7 @@ ${OBJ}: config.mk
 
 
 server: ${OBJ}
-	${CC} -pthread -o $@ ${OBJ}
+	${CC} -static -o $@ ${OBJ}
 
 
 clean:
