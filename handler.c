@@ -156,7 +156,7 @@ get_url_mimetype(const char *url)
 
 
 static int
-does_accept_gzip(const char *header)
+is_accept_gzip(const char *header)
 {   
     const char *q, *p = header;
 
@@ -247,20 +247,21 @@ build_http_status_step(enum http_status st, struct connection *conn,
 
     content_length = strlen(http_status_str[st]) + HTTP_STATUS_FORMAT_SIZE;
     data = xmalloc(256);
-    size = sprintf(data,
-        "HTTP/1.1 %d %s\r\n"
-        "Server: rockepoll\r\n"
-        "Accept-Ranges: bytes\r\n"
-        "Content-Length: %lu\r\n"
-        "Connection: %s\r\n"
-        "\r\n"
-        HTTP_STATUS_FORMAT,
-        st, http_status_str[st], content_length,
-        conn->keep_alive ? "keep-alive" : "close",
-        http_status_str[st]
-    );
+    size = 0;
 
-    setup_write_io_step(&conn->steps, data, 0, size, close_on_keep_alive);
+    size += sprintf(data + size, "HTTP/1.1 %d %s\r\n", st, http_status_str[st]);
+    size += sprintf(data + size, "Server: rockepoll\r\n");
+    size += sprintf(data + size, "Accept-Ranges: bytes\r\n");
+    size += sprintf(data + size, "Content-Length: %lu\r\n", content_length);
+    if (conn->keep_alive) {
+        size += sprintf(data + size, "Connection: keep-alive\r\n\r\n");
+    } else {
+        size += sprintf(data + size, "Connection: close\r\n\r\n");
+    }
+
+    size += sprintf(data + size, HTTP_STATUS_FORMAT, http_status_str[st]);
+
+    setup_write_io_step(&(conn->steps), data, 0, size, close_on_keep_alive);
 
     log_new_connection(conn, req, st, content_length);
 }
@@ -301,7 +302,7 @@ build_response(struct connection *conn)
         req.target = INDEX_PAGE;
     }
 
-    try_gz = does_accept_gzip(req.headers[H_ACCEPT_ENCODING]);
+    try_gz = is_accept_gzip(req.headers[H_ACCEPT_ENCODING]);
     switch(gather_file_meta(req.target, try_gz, &file_meta)) {
     case F_FORBIDDEN:
         build_http_status_step(S_FORBIDDEN, conn, &req);
@@ -365,24 +366,30 @@ build_response(struct connection *conn)
     }
 
     data = xmalloc(256);
-    size = sprintf(data,
-                  "HTTP/1.1 %d %s\r\n"
-                  "Server: rockepoll\r\n"
-                  "Accept-Ranges: bytes\r\n"
-                  "Content-Type: %s\r\n"
-                  "Content-Length: %lu\r\n"
-                  "Content-Encoding: %s\r\n"
-                  "Content-Range: bytes %lu-%lu/%lu\r\n"
-                  "Connection: %s\r\n"
-                  "ETag: \"%s\"\r\n"
-                  "\r\n",
-                  st, http_status_str[st], file_meta.mime,
-                  content_length,
-                  file_meta.gz ? "gzip" : "identity",
-                  lower, upper, file_meta.size,
-                  conn->keep_alive ? "keep-alive": "close",
-                  file_meta.etag
-    );
+    size = 0;
+
+    size += sprintf(data + size, "HTTP/1.1 %d %s\r\n", st, http_status_str[st]);
+    size += sprintf(data + size, "Server: rockepoll\r\n");
+    size += sprintf(data + size, "Accept-Ranges: bytes\r\n");
+    size += sprintf(data + size, "Content-Type: %s\r\n", file_meta.mime);
+    size += sprintf(data + size, "Content-Length: %lu\r\n", content_length);
+    size += sprintf(data + size, "ETag: \"%s\"\r\n", file_meta.etag);
+
+    if (st == S_PARTIAL_CONTENT) {
+        size += sprintf(data + size,
+                        "Content-Range: bytes %lu-%lu/%lu\r\n",
+                        lower, upper, file_meta.size);
+    }
+
+    if (file_meta.gz) {
+        size += sprintf(data + size, "Content-Encoding: gzip\r\n");
+    }
+
+    if (conn->keep_alive) {
+        size += sprintf(data + size, "Connection: keep-alive\r\n\r\n");
+    } else {
+        size += sprintf(data + size, "Connection: close\r\n\r\n");
+    }
 
     setup_write_io_step(&conn->steps, data, 1, size, NULL);
     setup_sendfile_io_step(&conn->steps,
