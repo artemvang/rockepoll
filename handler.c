@@ -230,7 +230,7 @@ static inline enum conn_status
 close_on_keep_alive(struct connection *conn)
 {
     if (conn->keep_alive) {
-        setup_read_io_step(&(conn->steps), build_response);
+        setup_read_io_step(&conn->steps, build_response);
         return C_RUN;
     }
 
@@ -289,7 +289,7 @@ build_response(struct connection *conn)
         return C_RUN;
     }
 
-    if (req.method != M_GET) {
+    if (req.method != M_GET && req.method != M_HEAD) {
         build_http_status_step(S_METHOD_NOT_ALLOWED, conn, &req);
         return C_RUN;
     }
@@ -392,9 +392,12 @@ build_response(struct connection *conn)
     }
 
     setup_write_io_step(&conn->steps, data, 1, size, NULL);
-    setup_sendfile_io_step(&conn->steps,
-                           file_meta.fd, lower, upper + 1, content_length,
-                           close_on_keep_alive);
+
+    if (req.method == M_GET) {
+        setup_sendfile_io_step(&conn->steps,
+                               file_meta.fd, lower, upper + 1, content_length,
+                               close_on_keep_alive);
+    }
 
     log_new_connection(conn, &req, st, content_length);
 
