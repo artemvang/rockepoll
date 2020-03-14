@@ -2,7 +2,6 @@
 #include <fcntl.h>
 #include <string.h>
 #include <stdio.h>
-#include <time.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 
@@ -18,9 +17,8 @@
 #define DEFAULT_MIMETYPE "application/octet-stream"
 #define HTTP_STATUS_FORMAT "<h1>%s</h1>"
 #define HTTP_STATUS_FORMAT_SIZE (sizeof(HTTP_STATUS_FORMAT) - 2 - 1)
-#define LOG_MESSAGE_FORMAT "%s [%s] \"%s\" %d %lu \"%s\"\n"
+#define LOG_MESSAGE_FORMAT "%s \"%s\" %d %lu \"%s\"\n"
 #define REQUEST_LINE_FORMAT "%s /%s HTTP/%s"
-#define TIMESTAMP_FORMAT "%a, %d/%b/%Y %H:%M:%S GMT"
 
 
 enum http_status {
@@ -100,8 +98,6 @@ log_new_connection(const struct connection *conn,
                    enum http_status status,
                    size_t content_lenght)
 {
-    struct tm *tm;
-    char timestamp[32] = {0};
     char *user_agent = "-";
     char *request_line = "-";
 
@@ -117,11 +113,9 @@ log_new_connection(const struct connection *conn,
                 http_versions[req->version].name);
     }
 
-    tm = gmtime(&conn->last_active);
-    strftime(timestamp, sizeof(timestamp), TIMESTAMP_FORMAT, tm);
-
-    log_log(LOG_MESSAGE_FORMAT,
-            conn->ip, timestamp, request_line,
+    log_log(&conn->last_active,
+            LOG_MESSAGE_FORMAT,
+            conn->ip, request_line,
             status, content_lenght,user_agent);
 
     if (status != S_BAD_REQUEST) {
@@ -261,7 +255,7 @@ build_http_status_step(enum http_status st, struct connection *conn,
 
     size += sprintf(data + size, HTTP_STATUS_FORMAT, http_status_str[st]);
 
-    setup_write_io_step(&(conn->steps), data, 0, size, close_on_keep_alive);
+    setup_write_io_step(&conn->steps, data, 0, size, close_on_keep_alive);
 
     log_new_connection(conn, req, st, content_length);
 }
