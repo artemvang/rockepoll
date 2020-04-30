@@ -246,7 +246,7 @@ build_http_status_step(enum http_status st, struct connection *conn,
     size += sprintf(data + size, "HTTP/1.1 %d %s\r\n", st, http_status_str[st]);
     size += sprintf(data + size, "Server: rockepoll\r\n");
     size += sprintf(data + size, "Accept-Ranges: bytes\r\n");
-    size += sprintf(data + size, "Content-Length: %lu\r\n", content_length);
+    size += sprintf(data + size, "Content-Length: %zu\r\n", content_length);
     if (conn->keep_alive) {
         size += sprintf(data + size, "Connection: keep-alive\r\n\r\n");
     } else {
@@ -366,12 +366,12 @@ build_response(struct connection *conn)
     size += sprintf(data + size, "Server: rockepoll\r\n");
     size += sprintf(data + size, "Accept-Ranges: bytes\r\n");
     size += sprintf(data + size, "Content-Type: %s\r\n", file_meta.mime);
-    size += sprintf(data + size, "Content-Length: %lu\r\n", content_length);
+    size += sprintf(data + size, "Content-Length: %zu\r\n", content_length);
     size += sprintf(data + size, "ETag: \"%s\"\r\n", file_meta.etag);
 
     if (st == S_PARTIAL_CONTENT) {
         size += sprintf(data + size,
-                        "Content-Range: bytes %lu-%lu/%lu\r\n",
+                        "Content-Range: bytes %zu-%zu/%zu\r\n",
                         lower, upper, file_meta.size);
     }
 
