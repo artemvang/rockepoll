@@ -20,18 +20,6 @@ xmalloc(const size_t size)
 }
 
 
-inline void *
-xrealloc(void *original, const size_t size)
-{
-    void *ptr = realloc(original, size);
-
-    if (!ptr) {
-        err(1, "realloc(), can't reallocate %zu bytes", size);
-    }
-    return ptr;
-}
-
-
 inline void
 xchdir(const char *dir)
 {

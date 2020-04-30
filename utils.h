@@ -9,7 +9,6 @@
 
 
 void *xmalloc(const size_t size);
-void *xrealloc(void *original, const size_t size);
 void xchdir(const char *dir);
 int create_listen_socket(const char *listen_addr, int port);
 
