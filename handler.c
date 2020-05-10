@@ -10,12 +10,10 @@
 #include "utils.h"
 #include "parser.h"
 #include "handler.h"
+#include "config.h"
 
 
 #define ETAG_SIZE 64
-#define INDEX_PAGE "index.html"
-#define DEFAULT_MIMETYPE "application/octet-stream"
-#define HTTP_STATUS_FORMAT "<h1>%s</h1>"
 #define HTTP_STATUS_FORMAT_SIZE (sizeof(HTTP_STATUS_FORMAT) - 2 - 1)
 #define LOG_MESSAGE_FORMAT "%s \"%s\" %d %lu \"%s\"\n"
 #define REQUEST_LINE_FORMAT "%s /%s HTTP/%s"
@@ -44,38 +42,6 @@ struct file_meta {
     char etag[ETAG_SIZE];
 };
 
-
-static const struct {
-    char *ext;
-    char *type;
-} mimes[] = {
-    { "xml",   "application/xml; charset=utf-8" },
-    { "xhtml", "application/xhtml+xml; charset=utf-8" },
-    { "html",  "text/html; charset=utf-8" },
-    { "htm",   "text/html; charset=utf-8" },
-    { "css",   "text/css; charset=utf-8" },
-    { "txt",   "text/plain; charset=utf-8" },
-    { "vtt",   "text/plain; charset=utf-8" },
-    { "md",    "text/plain; charset=utf-8" },
-    { "c",     "text/plain; charset=utf-8" },
-    { "h",     "text/plain; charset=utf-8" },
-    { "gz",    "application/x-gtar" },
-    { "tar",   "application/tar" },
-    { "pdf",   "application/pdf" },
-    { "png",   "image/png" },
-    { "gif",   "image/gif" },
-    { "jpeg",  "image/jpg" },
-    { "jpg",   "image/jpg" },
-    { "iso",   "application/x-iso9660-image" },
-    { "webp",  "image/webp" },
-    { "svg",   "image/svg+xml; charset=utf-8" },
-    { "flac",  "audio/flac" },
-    { "mp3",   "audio/mpeg" },
-    { "ogg",   "audio/ogg" },
-    { "mp4",   "video/mp4" },
-    { "ogv",   "video/ogg" },
-    { "webm",  "video/webm" },
-};
 
 static const char *http_status_str[] = {
     [S_OK]                     = "OK",

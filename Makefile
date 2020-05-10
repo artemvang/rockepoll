@@ -5,7 +5,7 @@ SRC = server.c utils.c io.c log.c parser.c handler.c
 OBJ = ${SRC:.c=.o}
 
 
-all: options server
+all: options rockepoll
 
 
 options:
@@ -16,14 +16,18 @@ options:
 	@echo "CC      = ${CC}"
 
 
+config.h:
+	cp config.def.h config.h
+
+
 .c.o:
 	${CC} -o $@ -c ${CFLAGS} $<
 
 
-${OBJ}: config.mk
+${OBJ}: config.mk config.h
 
 
-server: ${OBJ}
+rockepoll: ${OBJ}
 	${CC} -static -o $@ ${OBJ}
 
 

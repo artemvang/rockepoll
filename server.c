@@ -15,11 +15,9 @@
 #include "utils.h"
 #include "utlist.h"
 #include "handler.h"
+#include "config.h"
 
 
-#define MAXFDS 128
-#define MAX_THREADS 32
-#define KEEP_ALIVE_TIMEOUT 5 /* in seconds */
 #define EPOLL_WAIT_TIMEOUT (KEEP_ALIVE_TIMEOUT * 1000) /* in milliseconds */
 
 #if defined(__GNUC__) || defined(__INTEL_COMPILER)
@@ -38,12 +36,12 @@ do {                                                                          \
 
 
 /* command line parameters */
-static int   conf_port = 7887;
-static int   conf_keep_alive = 0;
-static int   conf_quiet = 0;
-static int   conf_chroot = 0;
-static char *conf_listen_addr = "127.0.0.1";
-static char *conf_root_dir = ".";
+static int   conf_port = DEFAULT_CONF_PORT;
+static int   conf_keep_alive = DEFAULT_CONF_KEEP_ALIVE;
+static int   conf_quiet = DEFAULT_CONF_QUIET;
+static int   conf_chroot = DEFAULT_CONF_CHROOT;
+static char *conf_listen_addr = DEFAULT_CONF_LISTEN_ADDR;
+static char *conf_root_dir = DEFAULT_CONF_ROOT_DIR;
 
 static volatile int loop = 1;
 
@@ -186,6 +184,7 @@ usage(const char *argv0)
            "[--addr addr] "
            "[--port port] "
            "[--quiet] "
+           "[--chroot] "
            "[--keep-alive]\n", argv0);
 }
 
