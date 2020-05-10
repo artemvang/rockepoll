@@ -38,11 +38,12 @@ do {                                                                          \
 
 
 /* command line parameters */
-static int   port = 7887;
-static int   keep_alive = 0;
-static int   quiet = 0;
-static char *listen_addr = "127.0.0.1";
-static char *root_dir = ".";
+static int   conf_port = 7887;
+static int   conf_keep_alive = 0;
+static int   conf_quiet = 0;
+static int   conf_chroot = 0;
+static char *conf_listen_addr = "127.0.0.1";
+static char *conf_root_dir = ".";
 
 static volatile int loop = 1;
 
@@ -80,7 +81,7 @@ accept_peers_loop(struct connection **connections,
             conn->fd = peerfd;
             conn->last_active = now;
             conn->status = C_RUN;
-            conn->keep_alive = keep_alive;
+            conn->keep_alive = conf_keep_alive;
             conn->steps = NULL;
             conn->next = NULL;
             conn->prev = NULL;
@@ -108,7 +109,7 @@ run_server()
     struct epoll_event   events[MAXFDS] = {0};
     struct connection   *tmp_conn, *conn, *connections = NULL;
 
-    listenfd = create_listen_socket(listen_addr, port);
+    listenfd = create_listen_socket(conf_listen_addr, conf_port);
 
     if ((epollfd = epoll_create1(0)) < 0) {
         err(1, "epoll_create1()");
@@ -202,15 +203,15 @@ parse_args(int argc, char *argv[])
     }
 
     if (getuid() == 0) {
-        port = 80;
+        conf_port = 80;
     }
 
-    root_dir = argv[1];
+    conf_root_dir = argv[1];
     /* Strip ending slash */
-    len = strlen(root_dir);
+    len = strlen(conf_root_dir);
     if (len > 1) {
-        if (root_dir[len - 1] == '/') {
-            root_dir[len - 1] = '\0';
+        if (conf_root_dir[len - 1] == '/') {
+            conf_root_dir[len - 1] = '\0';
         }
     }
 
@@ -219,7 +220,7 @@ parse_args(int argc, char *argv[])
             if (++i >= argc) {
                 errx(1, "missing number after --port");
             }
-            port = strtol(argv[i], &next, 10);
+            conf_port = strtol(argv[i], &next, 10);
             if (next == argv[i] || *next != '\0') {
                 errx(1, "invalid argument `%s'", argv[i]);
             }
@@ -228,13 +229,16 @@ parse_args(int argc, char *argv[])
             if (++i >= argc) {
                 errx(1, "missing ip after --addr");
             }
-            listen_addr = argv[i];
+            conf_listen_addr = argv[i];
         }
         else if (!strcmp(argv[i], "--quiet")) {
-            quiet = 1;
+            conf_quiet = 1;
+        }
+        else if (!strcmp(argv[i], "--chroot")) {
+            conf_chroot = 1;
         }
         else if (!strcmp(argv[i], "--keep-alive")) {
-            keep_alive = 1;
+            conf_keep_alive = 1;
         }
         else {
             errx(1, "unknown argument `%s'", argv[i]);
@@ -251,10 +255,10 @@ main(int argc, char *argv[])
 
     parse_args(argc, argv);
 
-    init_logger(quiet);
-    init_handler(root_dir);
+    init_logger(conf_quiet);
+    init_handler(conf_root_dir, conf_chroot);
 
-    printf("listening on http://%s:%d/\n", listen_addr, port);
+    printf("listening on http://%s:%d/\n", conf_listen_addr, conf_port);
     run_server();
 
     return 0;

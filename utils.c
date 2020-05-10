@@ -29,6 +29,15 @@ xchdir(const char *dir)
 }
 
 
+inline void
+xchroot(const char *dir)
+{
+    if (chroot(dir) < 0) {
+        err(1, "chroot(), `%s'", dir);
+    }
+}
+
+
 int
 create_listen_socket(const char *listen_addr, int port)
 {

@@ -262,9 +262,12 @@ build_http_status_step(enum http_status st, struct connection *conn,
 
 
 void
-init_handler(const char *root_dir)
+init_handler(const char *root_dir, int conf_chroot)
 {
     xchdir(root_dir);
+    if (conf_chroot) {
+        xchroot(root_dir);
+    }
 }
 
 
@@ -297,7 +300,7 @@ build_response(struct connection *conn)
     }
 
     try_gz = is_accept_gzip(req.headers[H_ACCEPT_ENCODING]);
-    switch(gather_file_meta(req.target, try_gz, &file_meta)) {
+    switch (gather_file_meta(req.target, try_gz, &file_meta)) {
     case F_FORBIDDEN:
         build_http_status_step(S_FORBIDDEN, conn, &req);
         return C_RUN;
