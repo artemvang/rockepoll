@@ -262,11 +262,11 @@ build_http_status_step(enum http_status st, struct connection *conn,
 
 
 void
-init_handler(const char *root_dir, int conf_chroot)
+init_handler(const char *conf_root_dir, int conf_chroot)
 {
-    xchdir(root_dir);
+    xchdir(conf_root_dir);
     if (conf_chroot) {
-        xchroot(root_dir);
+        xchroot(conf_root_dir);
     }
 }
 
