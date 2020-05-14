@@ -13,6 +13,7 @@
 
 #define INDEX_PAGE          "index.html"
 #define DEFAULT_MIMETYPE    "application/octet-stream"
+#define INDEX_MIMETYPE      "text/html; charset=utf-8"
 #define HTTP_STATUS_FORMAT  "<h1>%s</h1>"  // <h1>Not Found</h1>
 
 

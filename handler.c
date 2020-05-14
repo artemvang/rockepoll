@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <sys/stat.h>
 
 #include "io.h"
@@ -14,6 +15,7 @@
 
 
 #define ETAG_SIZE 64
+#define HEADERS_SIZE 256
 #define HTTP_STATUS_FORMAT_SIZE (sizeof(HTTP_STATUS_FORMAT) - 2 - 1)
 #define LOG_MESSAGE_FORMAT "%s \"%s\" %d %lu \"%s\"\n"
 #define REQUEST_LINE_FORMAT "%s /%s HTTP/%s"
@@ -36,7 +38,7 @@ enum http_status {
 enum file_status {F_EXISTS, F_FORBIDDEN, F_NOT_FOUND, F_INTERNAL_ERROR};
 
 struct file_meta {
-    int fd, gz;
+    int fd, is_directory;
     char *mime;
     size_t size;
     char etag[ETAG_SIZE];
@@ -115,71 +117,50 @@ get_url_mimetype(const char *url)
 }
 
 
-static int
-is_accept_gzip(const char *header)
-{   
-    const char *q, *p = header;
-
-    while (p) {
-        q = strchrnul(p, ',');
-        if (!strncmp(p, "gzip", sizeof("gzip") - 1)) {
-            return 1;
-        }
-        if (*q == '\0') {
-            break;
-        }
-
-        p = q + 1;
-        for (; *p == ' ' || *p == '\t'; p++) ;
-    }
-
-    return 0;
-}
-
-
 static enum file_status
-gather_file_meta(const char *target, int try_gz, struct file_meta *file_meta)
+gather_file_meta(const char *target, struct file_meta *file_meta)
 {
-    int fd = -1;
-    size_t target_len;
-    struct stat st_buf;
-    static char target_enc[MAX_TARGET_SIZE + 4];
+    char *mimetype;
+    int fd, index_file_fd, is_dir;
+    struct stat st_buf, index_file_st_buf;
+    char index_file[MAX_TARGET_SIZE + sizeof("/" INDEX_PAGE)] = {0};
 
-    target_len = strlen(target);
-
-    file_meta->gz = 0;
-    if (try_gz) {
-        strcpy(target_enc, target);
-        memcpy(target_enc + target_len, ".gz", sizeof(".gz"));
-
-        fd = open(target_enc, O_LARGEFILE | O_RDONLY | O_NONBLOCK);
-        if (fd > 0) {
-            file_meta->gz = 1;
-        }
-    }
-
+    fd = open(target, O_LARGEFILE | O_RDONLY | O_NONBLOCK);
     if (fd < 0) {
-        fd = open(target, O_LARGEFILE | O_RDONLY | O_NONBLOCK);
-        if (fd < 0) {
-            return (errno == EACCES) ? F_FORBIDDEN : F_NOT_FOUND;
-        }
+        return (errno == EACCES) ? F_FORBIDDEN : F_NOT_FOUND;
     }
-
-    file_meta->fd = fd;
 
     if (fstat(fd, &st_buf) < 0) {
         return F_INTERNAL_ERROR;
     }
 
-    if (S_ISDIR(st_buf.st_mode)) {
-        return F_NOT_FOUND;
-    }
-    else if (!S_ISREG(st_buf.st_mode)) {
+    is_dir = S_ISDIR(st_buf.st_mode);
+
+    if (!S_ISREG(st_buf.st_mode) && !is_dir) {
         return F_FORBIDDEN;
     }
 
+    mimetype = get_url_mimetype(target);
+
+    if (is_dir) {
+        sprintf(index_file, "%s/" INDEX_PAGE, target);
+
+        index_file_fd = open(index_file, O_LARGEFILE | O_RDONLY | O_NONBLOCK);
+        if (index_file_fd > 0 &&
+                !fstat(index_file_fd, &index_file_st_buf) &&
+                S_ISREG(index_file_st_buf.st_mode))
+        {
+            fd = index_file_fd;
+            mimetype = INDEX_MIMETYPE;
+            st_buf = index_file_st_buf;
+            is_dir = 0;
+        }
+    }
+
+    file_meta->fd = fd;
+    file_meta->is_directory = is_dir;
+    file_meta->mime = mimetype;
     file_meta->size = st_buf.st_size;
-    file_meta->mime = get_url_mimetype(target);
     sprintf(file_meta->etag, "%ld-%ld", st_buf.st_mtim.tv_sec, st_buf.st_size);
 
     return F_EXISTS;
@@ -206,7 +187,7 @@ build_http_status_step(enum http_status st, struct connection *conn,
     size_t content_length, size;
 
     content_length = strlen(http_status_str[st]) + HTTP_STATUS_FORMAT_SIZE;
-    data = xmalloc(256);
+    data = xmalloc(HEADERS_SIZE);
     size = 0;
 
     size += sprintf(data + size, "HTTP/1.1 %d %s\r\n", st, http_status_str[st]);
@@ -240,7 +221,7 @@ init_handler(const char *conf_root_dir, int conf_chroot)
 enum conn_status
 build_response(struct connection *conn)
 {
-    int st, try_gz;
+    int st;
     char *data, *p;
     struct http_request req = {0};
     struct file_meta file_meta = {0};
@@ -262,11 +243,10 @@ build_response(struct connection *conn)
     }
 
     if (*req.target == '\0') {
-        req.target = INDEX_PAGE;
+        req.target = ".";
     }
 
-    try_gz = is_accept_gzip(req.headers[H_ACCEPT_ENCODING]);
-    switch (gather_file_meta(req.target, try_gz, &file_meta)) {
+    switch (gather_file_meta(req.target, &file_meta)) {
     case F_FORBIDDEN:
         build_http_status_step(S_FORBIDDEN, conn, &req);
         return C_RUN;
@@ -281,6 +261,13 @@ build_response(struct connection *conn)
         break;
     default:
         break;
+    }
+
+    if (file_meta.is_directory) {
+        close(file_meta.fd);
+        // TODO: create files listings
+        build_http_status_step(S_NOT_FOUND, conn, &req);
+        return C_RUN;
     }
 
     if (req.headers[H_IF_MATCH] && !strcmp(file_meta.etag, req.headers[H_IF_MATCH])) {
@@ -328,7 +315,7 @@ build_response(struct connection *conn)
         st = S_PARTIAL_CONTENT;
     }
 
-    data = xmalloc(256);
+    data = xmalloc(HEADERS_SIZE);
     size = 0;
 
     size += sprintf(data + size, "HTTP/1.1 %d %s\r\n", st, http_status_str[st]);
@@ -342,10 +329,6 @@ build_response(struct connection *conn)
         size += sprintf(data + size,
                         "Content-Range: bytes %zu-%zu/%zu\r\n",
                         lower, upper, file_meta.size);
-    }
-
-    if (file_meta.gz) {
-        size += sprintf(data + size, "Content-Encoding: gzip\r\n");
     }
 
     if (conn->keep_alive) {
