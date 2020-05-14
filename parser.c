@@ -4,6 +4,9 @@
 #include "parser.h"
 
 
+#define ENDS(c) ((c) == '/' || (c) == '\0')
+
+
 static ALWAYS_INLINE char
 decode_hex(int ch)
 {
@@ -41,6 +44,61 @@ decode_target(char *target)
     *decoded = '\0';
 }
 
+static char *
+remove_target_dots(char *url)
+{
+    char *src = url, *dst;
+
+    for (; *src && *src != '?'; ++src) {
+        if (*src == '/') {
+            if (src[1] == '/') {
+                break;
+            }
+            else if (src[1] == '.') {
+                if (ENDS(src[2])) {
+                    break;
+                }
+                else if (src[2] == '.' && ENDS(src[3])) {
+                    break;
+                }
+            }
+        }
+    }
+
+    dst = src;
+    while (*src && *src != '?') {
+        if (*src != '/') {
+            *dst++ = *src++;
+        }
+        else if (*++src == '/') {
+            ;
+        }
+        else if (*src != '.') {
+            *dst++ = '/';
+        }
+        else if (ENDS(src[1])) {
+            ++src;
+        }
+        else if (src[1] == '.' && ENDS(src[2])) {
+            src += 2;
+            if (dst == url) {
+                return NULL;
+            } else {
+                while (*--dst != '/' && dst > url);
+            }
+        } else {
+            *dst++ = '/';
+        }
+    }
+
+    if (dst == url) {
+        ++dst;
+    }
+    *dst = '\0';
+
+    return url;
+}
+
 
 int
 parse_request(char *data, struct http_request *req)
@@ -64,8 +122,6 @@ parse_request(char *data, struct http_request *req)
         return -1;
     }
 
-    /* skip / */
-    p++;
     if (!(q = strchr(p, ' '))) {
         return -1;
     }
@@ -75,8 +131,12 @@ parse_request(char *data, struct http_request *req)
 
     *q++ = '\0';
 
-    req->target = p;
-    decode_target(req->target);
+    decode_target(p);
+    if (!(p = remove_target_dots(p))) {
+        return -1;
+    }
+    // skip /
+    req->target = ++p;
 
     p = q;
 
