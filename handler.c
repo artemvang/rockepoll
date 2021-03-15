@@ -15,6 +15,7 @@
 
 
 #define ETAG_SIZE 64
+#define SENDFILE_MIN_SIZE 1024 * 8
 #define HEADERS_SIZE 256
 #define HTTP_STATUS_FORMAT_SIZE (sizeof(HTTP_STATUS_FORMAT) - 2 - 1)
 #define LOG_MESSAGE_FORMAT "%s \"%s\" %d %lu \"%s\"\n"
@@ -39,6 +40,7 @@ enum file_status {F_EXISTS, F_FORBIDDEN, F_NOT_FOUND, F_INTERNAL_ERROR};
 
 struct file_meta {
     int fd, is_directory;
+    ino_t inode;
     char *mime;
     size_t size;
     char etag[ETAG_SIZE];
@@ -121,46 +123,43 @@ static enum file_status
 gather_file_meta(const char *target, struct file_meta *file_meta)
 {
     char *mimetype;
-    int fd, index_file_fd, is_dir;
-    struct stat st_buf, index_file_st_buf;
-    char index_file[MAX_TARGET_SIZE + sizeof("/" INDEX_PAGE)] = {0};
+    int fd, is_dir;
+    size_t target_size, orig_target_size;
+    struct stat st_buf;
+    char target_tmp[MAX_TARGET_SIZE] = {0};
 
-    fd = open(target, O_LARGEFILE | O_RDONLY | O_NONBLOCK);
-    if (fd < 0) {
-        return (errno == EACCES) ? F_FORBIDDEN : F_NOT_FOUND;
-    }
+    target_size = orig_target_size = strlen(target);
+    memcpy(target_tmp, target, target_size + 1);
 
-    if (fstat(fd, &st_buf) < 0) {
-        return F_INTERNAL_ERROR;
-    }
-
-    is_dir = S_ISDIR(st_buf.st_mode);
-
-    if (!S_ISREG(st_buf.st_mode) && !is_dir) {
-        return F_FORBIDDEN;
-    }
-
-    mimetype = get_url_mimetype(target);
-
-    if (is_dir) {
-        sprintf(index_file, "%s/" INDEX_PAGE, target);
-
-        index_file_fd = open(index_file, O_LARGEFILE | O_RDONLY | O_NONBLOCK);
-        if (index_file_fd > 0 &&
-                !fstat(index_file_fd, &index_file_st_buf) &&
-                S_ISREG(index_file_st_buf.st_mode))
-        {
-            fd = index_file_fd;
-            mimetype = INDEX_MIMETYPE;
-            st_buf = index_file_st_buf;
-            is_dir = 0;
+    for (;;) {
+        fd = open(target_tmp, O_LARGEFILE | O_RDONLY | O_NONBLOCK);
+        if (fd < 0) {
+            return (errno == EACCES) ? F_FORBIDDEN : F_NOT_FOUND;
+        } else if (fstat(fd, &st_buf) < 0) {
+            return F_INTERNAL_ERROR;
         }
+
+        is_dir = S_ISDIR(st_buf.st_mode);
+
+        if (!S_ISREG(st_buf.st_mode) && !is_dir) {
+            return F_FORBIDDEN;
+        }
+
+        if (!is_dir) {
+            mimetype = get_url_mimetype(target_tmp);
+            break;
+        }
+
+        memcpy(target_tmp + target_size, "/" INDEX_PAGE, sizeof("/" INDEX_PAGE));
+        target_size += sizeof("/" INDEX_PAGE) - 1;
+        close(fd);
     }
 
     file_meta->fd = fd;
     file_meta->is_directory = is_dir;
     file_meta->mime = mimetype;
     file_meta->size = st_buf.st_size;
+    file_meta->inode = st_buf.st_ino;
     sprintf(file_meta->etag, "%ld-%ld", st_buf.st_mtim.tv_sec, st_buf.st_size);
 
     return F_EXISTS;
@@ -188,12 +187,14 @@ build_http_status_step(enum http_status st, struct connection *conn,
 
     content_length = strlen(http_status_str[st]) + HTTP_STATUS_FORMAT_SIZE;
     data = xmalloc(HEADERS_SIZE);
-    size = 0;
 
-    size += sprintf(data + size, "HTTP/1.1 %d %s\r\n", st, http_status_str[st]);
-    size += sprintf(data + size, "Server: rockepoll\r\n");
-    size += sprintf(data + size, "Accept-Ranges: bytes\r\n");
-    size += sprintf(data + size, "Content-Length: %zu\r\n", content_length);
+    size = sprintf(
+        data,
+        "HTTP/1.1 %d %s\r\n"
+        "Server: rockepoll\r\n"
+        "Accept-Ranges: bytes\r\n"
+        "Content-Length: %zu\r\n", st, http_status_str[st], content_length);
+
     if (conn->keep_alive) {
         size += sprintf(data + size, "Connection: keep-alive\r\n\r\n");
     } else {
@@ -315,15 +316,20 @@ build_response(struct connection *conn)
         st = S_PARTIAL_CONTENT;
     }
 
-    data = xmalloc(HEADERS_SIZE);
-    size = 0;
+    data = xmalloc(HEADERS_SIZE + (content_length < SENDFILE_MIN_SIZE) * content_length);
 
-    size += sprintf(data + size, "HTTP/1.1 %d %s\r\n", st, http_status_str[st]);
-    size += sprintf(data + size, "Server: rockepoll\r\n");
-    size += sprintf(data + size, "Accept-Ranges: bytes\r\n");
-    size += sprintf(data + size, "Content-Type: %s\r\n", file_meta.mime);
-    size += sprintf(data + size, "Content-Length: %zu\r\n", content_length);
-    size += sprintf(data + size, "ETag: \"%s\"\r\n", file_meta.etag);
+    size = sprintf(
+        data,
+        "HTTP/1.1 %d %s\r\n"
+        "Server: rockepoll\r\n"
+        "Accept-Ranges: bytes\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %zu\r\n"
+        "ETag: \"%s\"\r\n"
+        "Connection: %s\r\n",
+        st, http_status_str[st], file_meta.mime,
+        content_length, file_meta.etag,
+        conn->keep_alive ? "keep-alive" : "close");
 
     if (st == S_PARTIAL_CONTENT) {
         size += sprintf(data + size,
@@ -331,18 +337,26 @@ build_response(struct connection *conn)
                         lower, upper, file_meta.size);
     }
 
-    if (conn->keep_alive) {
-        size += sprintf(data + size, "Connection: keep-alive\r\n\r\n");
-    } else {
-        size += sprintf(data + size, "Connection: close\r\n\r\n");
-    }
-
-    setup_write_io_step(&conn->steps, data, 1, size, NULL);
+    size += sprintf(data + size, "\r\n");
 
     if (req.method == M_GET) {
-        setup_sendfile_io_step(&conn->steps,
-                               file_meta.fd, lower, upper + 1, content_length,
-                               close_on_keep_alive);
+        if (content_length < SENDFILE_MIN_SIZE) {
+            if (lower) {
+                lseek(file_meta.fd, lower, SEEK_SET);
+            }
+            size += read(file_meta.fd, data + size, content_length);
+
+            setup_write_io_step(&conn->steps,
+                                data,
+                                0, size,
+                                close_on_keep_alive);
+            close(file_meta.fd);
+        } else {
+            setup_write_io_step(&conn->steps, data, 1, size, NULL);
+            setup_sendfile_io_step(&conn->steps,
+                                   file_meta.fd, lower, upper + 1, content_length,
+                                   close_on_keep_alive);
+        }
     }
 
     log_new_connection(conn, &req, st, content_length);

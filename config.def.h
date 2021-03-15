@@ -32,6 +32,8 @@ static const struct {
     { "md",    "text/plain; charset=utf-8" },
     { "c",     "text/plain; charset=utf-8" },
     { "h",     "text/plain; charset=utf-8" },
+    { "log",   "text/plain; charset=utf-8" },
+    { "py",    "text/plain; charset=utf-8" },
     { "gz",    "application/x-gtar" },
     { "tar",   "application/tar" },
     { "pdf",   "application/pdf" },

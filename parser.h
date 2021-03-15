@@ -23,7 +23,7 @@ enum http_header {
     HEADERS_COUNT,
 };
 
-enum http_method {M_GET, M_POST, M_OPTIONS, M_DELETE, M_HEAD, HTTP_METHODS_COUNT};
+enum http_method {M_GET, M_POST, M_OPTIONS, M_DELETE, M_HEAD, M_PATCH, HTTP_METHODS_COUNT};
 enum http_version {V10, V11, V20};
 
 struct http_request {
@@ -49,6 +49,7 @@ ENUM_MAPPING(http_methods) {
     MAPPING_ENTRY(M_DELETE,  "DELETE"),
     MAPPING_ENTRY(M_OPTIONS, "OPTIONS"),
     MAPPING_ENTRY(M_HEAD,    "HEAD"),
+    MAPPING_ENTRY(M_PATCH,    "PATCH")
 };
 
 

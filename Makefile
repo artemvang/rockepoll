@@ -28,7 +28,7 @@ ${OBJ}: config.mk config.h
 
 
 rockepoll: ${OBJ}
-	${CC} -static -o $@ ${OBJ}
+	${CC} -static -o $@ ${OBJ} -lpthread
 
 
 clean:

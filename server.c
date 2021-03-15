@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <err.h>
+#include <pthread.h>
 
 #include "io.h"
 #include "log.h"
@@ -37,6 +38,7 @@ do {                                                                          \
 
 /* command line parameters */
 static int   conf_port = DEFAULT_CONF_PORT;
+static int   conf_threads = 0;
 static int   conf_keep_alive = DEFAULT_CONF_KEEP_ALIVE;
 static int   conf_quiet = DEFAULT_CONF_QUIET;
 static int   conf_chroot = DEFAULT_CONF_CHROOT;
@@ -98,7 +100,7 @@ accept_peers_loop(struct connection **connections,
 }
 
 
-static void
+static void *
 run_server()
 {
     int                  i, epollfd, listenfd;
@@ -130,7 +132,7 @@ run_server()
             }
         }
 
-        i = epoll_wait(epollfd, events, MAXFDS, EPOLL_WAIT_TIMEOUT);
+        i = epoll_wait(epollfd, events, MAXFDS, EPOLL_WAIT_TIMEOUT / 4);
         if (i < 0) {
             warn("epoll_wait()");
             continue;
@@ -167,6 +169,8 @@ run_server()
 
     close(listenfd);
     close(epollfd);
+
+    return NULL;
 }
 
 
@@ -224,6 +228,15 @@ parse_args(int argc, char *argv[])
                 errx(1, "invalid argument `%s'", argv[i]);
             }
         }
+        else if (!strcmp(argv[i], "--threads")) {
+            if (++i >= argc) {
+                errx(1, "missing number after --threads");
+            }
+            conf_threads = strtol(argv[i], &next, 10);
+            if (next == argv[i] || *next != '\0') {
+                errx(1, "invalid argument `%s'", argv[i]);
+            }
+        }
         else if (!strcmp(argv[i], "--addr")) {
             if (++i >= argc) {
                 errx(1, "missing ip after --addr");
@@ -243,12 +256,18 @@ parse_args(int argc, char *argv[])
             errx(1, "unknown argument `%s'", argv[i]);
         }
     }
+
+    conf_threads = (conf_threads) ? conf_threads : 1;
 }
 
 
 int
 main(int argc, char *argv[])
 {
+    void *ptr;
+    int i;
+    pthread_t *tid;
+
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, sigint_handler);
 
@@ -257,8 +276,24 @@ main(int argc, char *argv[])
     init_logger(conf_quiet);
     init_handler(conf_root_dir, conf_chroot);
 
-    printf("listening on http://%s:%d/\n", conf_listen_addr, conf_port);
-    run_server();
+    printf("listening on http://%s:%d/.\nRunning with %d threads.\n", conf_listen_addr, conf_port, conf_threads);
+
+    if (conf_threads == 1) {
+        run_server();
+        return 0;
+    }
+
+    tid = xmalloc(sizeof(pthread_t) * conf_threads);
+
+    for (i = 0; i < conf_threads; i++) {
+        pthread_create(&(tid[i]), NULL, &run_server, NULL);
+    }
+
+    for (i = 0; i < conf_threads; i++) {
+        pthread_join(tid[i], &ptr);
+    }
+
+    free(tid);
 
     return 0;
 }
